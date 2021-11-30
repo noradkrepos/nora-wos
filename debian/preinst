@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+case "$1" in
+    install|upgrade)
+    if [ -e /var/lib/nora-wos/cgi/ws ]
+    then
+        cp /var/lib/nora-wos/cgi/ws /tmp/nora-wos.ws
+    else
+        touch /tmp/nora-wos.ws
+    fi
+    if [ -e /usr/share/perl5/RAP/ADH/WS.pm ]
+    then
+        cp /usr/share/perl5/RAP/ADH/WS.pm /tmp/nora-wos.WS.pm
+    else
+        touch /tmp/nora-wos.WS.pm
+    fi
+    ;;
+    abort-upgrade)
+        rm -f /tmp/nora-wos.ws /tmp/nora-wos.WS.pm
+    ;;
+    *)
+        echo "preinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+exit 0

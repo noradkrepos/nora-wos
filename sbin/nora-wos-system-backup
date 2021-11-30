@@ -1,0 +1,63 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use NORA::WOS;
+
+my $root = '/var/lib/nora-wos/db';
+my $database = "$root/nora-wos.sqlite3";
+
+my $wos = new NORA::WOS ();
+my $Backups = {};
+if (-e "$root/backup.dat") {
+    if (open (my $fin, "$root/backup.dat")) {
+        while (<$fin>) {
+            chomp;
+            my ($md5, $size, $date, $file) = split ("\t");
+            $Backups->{$md5} = $file;
+        }
+        close ($fin);
+    } else {
+        $wos->log ('f', 'failed to open %s/backup.dat for read: %s', $root, $!);
+        exit (1);
+    }
+}
+my ($dbmd5) = split (' ', `md5sum $database`);
+if (exists ($Backups->{$dbmd5})) {
+    $wos->log ('i', 'Current database already backed up as %s', $Backups->{$dbmd5});
+    exit (0);
+}
+my ($sec, $min, $hour, $day, $mon, $year) = localtime ();
+my $date = sprintf ('%04d-%02d-%02d', (1900 + $year), ($mon + 1), $day);
+my $datetime = sprintf ('%04d-%02d-%02d %2d:%02d:%02d', (1900 + $year), ($mon + 1), $day, $hour, $min, $sec);
+my $ver = '001';
+while ((-e "$root/nora-wos-$date-$ver.sqlite3") || (-e "$root/nora-wos-$date-$ver.sqlite3.gz")) {
+    $ver = sprintf ('%03d', $ver + 1);
+}
+my $backup = "$root/nora-wos-$date-$ver.sqlite3";
+$wos->log ('i', 'copying database...');
+system ("cp $database $backup");
+$wos->log ('i', 'checking copy...');
+my ($bkmd5) = split (' ', `md5sum $backup`);
+if ($dbmd5 eq $bkmd5) {
+    $wos->log ('i', '- database backup successful.');
+} else {
+    $wos->log ('f', '- database backup failed.');
+    $wos->log ('f', 'fail');
+    exit (1);
+}
+$wos->log ('i', 'compressing backup...');
+my $size1 = -s $backup;
+system ("gzip -9 $backup");
+my $size2 = -s "$backup.gz";
+$wos->log ('i', '- compressed %0.2f%%', (1 - ($size2 / $size1)) * 100);
+if (open (my $fap, ">> $root/backup.dat")) {
+    print ($fap join ("\t", $bkmd5, $size1, $datetime, $backup), "\n");
+    close ($fap);
+} else {
+    $wos->log ('f', 'failed to write to %s/backup.dat - %s', $root, $@);
+    $wos->log ('f', 'fail');
+    exit (1);
+}
+$wos->log ('i', 'done');
+exit (0);

@@ -1,0 +1,48 @@
+#! /bin/sh
+set -e
+DIR="/etc/nora-wos /var/log/nora-wos /var/lib/nora-wos /var/run/nora-wos"
+WDIR="/var/lib/nora-wos/cache"
+case "$1" in
+    configure)
+        if ! grep nora-wos /etc/group > /dev/null
+        then
+            addgroup nora-wos
+        fi
+        chgrp -R nora-wos $DIR
+        chmod 2775 $DIR
+        chgrp -R nora-wos $WDIR
+        chown -R www-data $WDIR
+        chmod 2775 $WDIR
+        find /var/lib/nora-wos/ -type d | xargs chgrp nora-wos
+        find /var/lib/nora-wos/ -type d | xargs chmod 2775
+        if [ -d /san -a -d /var/lib/nora-wos ]
+        then
+            if [ ! -e /san/nora-wos ]
+            then
+                mv /var/lib/nora-wos /san/
+                ln -s /san/nora-wos /var/lib/nora-wos
+            fi
+        fi
+        if ! diff -q /var/lib/nora-wos/cgi/ws /tmp/nora-wos.ws > /dev/null
+        then
+            echo 'web service updated, restarting apache'
+            /etc/init.d/apache2 restart
+        else
+            if ! diff -q /usr/share/perl5/NORA/WOS/WS.pm /tmp/nora-wos.WS.pm > /dev/null
+            then
+                echo 'web service library updated, restarting apache'
+                /etc/init.d/apache2 restart
+            fi
+        fi
+        rm -f /tmp/nora-wos.ws /tmp/nora-wos.WS.pm
+    ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+exit 0
+
+

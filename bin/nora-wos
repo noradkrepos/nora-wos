@@ -1,0 +1,156 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use NORA::WOS;
+
+my $wos = new NORA::WOS ();
+my $comm;
+my @args = ();
+if (@ARGV) {
+    ($comm, @args) = &map_comm (@ARGV);
+} else {
+    &usage ();
+}
+if ($comm eq 'system-backup') {
+    my $log = &log ($comm);
+    my $sta = &log_start ($log);
+    system ("/usr/sbin/nora-wos-system-backup 2>&1 | tee -a $log");
+    &log_end ($log, $sta);
+    exit (0);
+}
+if ($comm eq 'fetch-danish-records') {
+    my $log = &log ($comm);
+    my $sta = &log_start ($log);
+    my $args = join (' ', @args);
+    system ("/usr/sbin/nora-wos-fetch-danish-records $args 2>&1 | tee -a $log");
+    &log_end ($log, $sta);
+    exit (0);
+}
+if ($comm eq 'update-danish-records') {
+    my $log = &log ($comm);
+    my $sta = &log_start ($log);
+    system ("/usr/sbin/nora-wos-update-danish-records 2>&1 | tee -a $log");
+    &log_end ($log, $sta);
+    exit (0);
+}
+die ("fatal: missing command: $comm\n");
+exit (0);
+
+sub log
+{
+    my ($name) = @_;
+
+    my $root = '/var/log/nora-wos';
+    my ($sec, $min, $hour, $day, $mon, $year) = localtime (time);
+    my $date = sprintf ('%04d-%02d-%02d', 1900 + $year, $mon + 1, $day);
+    my $n = '01';
+    while (-e "$root/$name-$date-$n.log") {
+        $n = sprintf ('%02d', ($n + 1));
+    }
+    return ("$root/$name-$date-$n.log");
+}
+
+sub log_start
+{
+    my ($log) = @_;
+
+    my $start = time;
+    my ($sec, $min, $hour, $day, $mon, $year) = localtime ($start);
+    open (my $flog, "> $log");
+    printf($flog "%04d-%02d-%02d %02d:%02d:%02d i start\n", 1900 + $year, $mon + 1, $day, $hour, $min, $sec);
+    close ($flog);
+    printf(STDERR "%04d-%02d-%02d %02d:%02d:%02d i start\n", 1900 + $year, $mon + 1, $day, $hour, $min, $sec);
+    return ($start);
+}
+
+sub log_msg
+{
+    my ($log, $level, $msg, @args) = @_;
+
+    my ($sec, $min, $hour, $day, $mon, $year) = localtime ();
+    open (my $flog, ">> $log");
+    printf($flog "%04d-%02d-%02d %02d:%02d:%02d %s $msg\n", 1900 + $year, $mon + 1, $day, $hour, $min, $sec, $level, @args);
+    close ($flog);
+    printf(STDERR "%04d-%02d-%02d %02d:%02d:%02d %s $msg\n", 1900 + $year, $mon + 1, $day, $hour, $min, $sec, $level, @args);
+}
+
+sub log_end
+{
+    my ($log, $start) = @_;
+
+    my $time = time;
+    my ($sec, $min, $hour, $day, $mon, $year) = localtime ($time);
+    open (my $flog, ">> $log");
+    my $elapse = $time - $start;
+    printf($flog "%04d-%02d-%02d %02d:%02d:%02d i end - elapse %02d:%02d:%02d (%5d sec)\n", 1900 + $year, $mon + 1, $day, $hour, $min, $sec,
+           ($elapse / 3600), ($elapse % 3600 / 60), ($elapse % 3600 % 60), $elapse);
+    close ($flog);
+    printf(STDERR "%04d-%02d-%02d %02d:%02d:%02d i end - elapse %02d:%02d:%02d (%5d sec)\n", 1900 + $year, $mon + 1, $day, $hour, $min, $sec,
+           ($elapse / 3600), ($elapse % 3600 / 60), ($elapse % 3600 % 60), $elapse);
+}
+
+sub map_comm
+{
+    my ($grp, $comm, @args) = @_;
+
+    my $Comm = {
+        system => {
+            'backup'               => 'system-backup',
+        },
+        fetch => {
+            'danish-records'       => 'fetch-danish-records',
+        },
+        update => {
+            'danish-records'       => 'update-danish-records',
+        },
+    };
+    my $match = 0;
+    my $group = '';
+    foreach my $g (keys (%{$Comm})) {
+        if ($grp eq substr ($g, 0, length ($grp))) {
+            $match++;
+            $group = $g;
+        }
+    }
+    if ($match == 0) {
+        &usage ("fatal: command group not found: '%s'", $grp);
+    }
+    if ($match > 1) {
+        &usage ("fatal: ambiguous command group: '%s'", $grp);
+    }
+    if (!$comm) {
+        &usage ();
+    }
+    $match = 0;
+    my $command = '';
+    foreach my $c (keys (%{$Comm->{$group}})) {
+        if ($comm eq substr ($c, 0, length ($comm))) {
+            $match++;
+            $command = $Comm->{$group}{$c};
+        }
+    }
+    if ($match == 0) {
+        &usage ("fatal: command not found: '%s %s'", $group, $comm);
+    }
+    if ($match > 1) {
+        &usage ("fatal: ambiguous command: '%s %s'", $group, $comm);
+    }
+    return ($command, @args);
+}
+
+sub usage
+{
+    my ($msg, @args) = @_;
+
+    if ($msg) {
+        printf (STDERR "\n" . $msg . "\n\n", @args);
+    }
+    warn ("usage: nora-wos system     backup\n\n");
+
+    warn ("       nora-wos fetch      danish-records\n\n");
+
+    warn ("       nora-wos update     danish-records\n\n");
+    exit (1);
+}
+

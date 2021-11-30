@@ -1,0 +1,134 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use JSON::XS;
+use NORA::WOS;
+use NORA::WOS::DB;
+use NORA::WOS::API;
+
+my $wos = new NORA::WOS ();
+my $db  = new NORA::WOS::DB ();
+my $api = new NORA::WOS::API ();
+my $sth = $db->sql ("select count(*) as n from doc");
+my $rc = $sth->fetchrow_hashref;
+my $total = $rc->{'n'};
+$wos->log ('i', 'found %d Danish records to process...', $total);
+$sth = $db->sql ("select json from doc");
+my $jxs = new JSON::XS ();
+my $Orgs = {'.nodenmark' => 0, '.nocountry' => 0, '.noaddress' => 0};
+my $recs = 0;
+while ($rc = $sth->fetchrow_hashref) {
+    my $rec = $jxs->decode ($rc->{'json'});
+    foreach my $add ($api->wos_array ($rec, 'static_data/fullrecord_metadata/addresses/address_name')) {
+        &get_org ($Orgs, $api, $rec, $add);
+    }
+    foreach my $add ($api->wos_array ($rec, 'static_data/fullrecord_metadata/reprint_addresses/address_name')) {
+        &get_org ($Orgs, $api, $rec, $add);
+    }
+    $recs++;
+    if (($recs % 20000) == 0) {
+        $wos->log ('i', 'processed %d records of %d, %d without country', $recs, $total, $Orgs->{'.nocountry'});
+    }
+}
+$wos->log ('i', 'processed %d records of %d, %d without country', $recs, $total, $Orgs->{'.nocountry'});
+#print ($jxs->encode ($Orgs), "\n");
+$wos->log ('i', '%d no country, %d not denmark, %d no address', $Orgs->{'.nocountry'}, $Orgs->{'.nodenmark'}, $Orgs->{'.noaddress'});
+delete ($Orgs->{'.nodenmark'});
+delete ($Orgs->{'.nocountry'});
+delete ($Orgs->{'.noaddress'});
+open (my $fou, '> nora-wos-org-list-pref.csv');
+foreach my $org (sort {$Orgs->{'u'}{$b}{'n'} <=> $Orgs->{'u'}{$a}{'n'}} keys (%{$Orgs->{'u'}})) {
+    my ($oname, $name, $addr) = split ('//', $org);
+    if ($addr) {
+        if ($addr =~ s/^name://) {
+            my $s = $name;
+            $name = $addr;
+            $addr = $s;
+        }
+        $addr =~ s/^addr://;
+    } else {
+        $addr = '';
+    }
+    if ($name) {
+        if ($name =~ s/^addr://) {
+            my $s = $addr;
+            $addr = $name;
+            $name = $s;
+        }
+        $name =~ s/^name://;
+    } else {
+        $name = '';
+    }
+    print ($fou join ("\t", $Orgs->{'u'}{$org}{'n'}, $oname, $name, $addr), "\n");
+}
+close ($fou);
+open ($fou, '> nora-wos-org-list-name.csv');
+foreach my $org (sort {$Orgs->{'n'}{$b}{'n'} <=> $Orgs->{'n'}{$a}{'n'}} keys (%{$Orgs->{'n'}})) {
+    my ($name, $addr) = split ('//', $org);
+    if ($addr) {
+        $addr =~ s/^addr://;
+    } else {
+        $addr = '';
+    }
+    print ($fou join ("\t", $Orgs->{'n'}{$org}{'n'}, $name, $addr), "\n");
+}
+close ($fou);
+open ($fou, '> nora-wos-org-list-addr.csv');
+foreach my $org (sort {$Orgs->{'a'}{$b}{'n'} <=> $Orgs->{'a'}{$a}{'n'}} keys (%{$Orgs->{'a'}})) {
+    print ($fou join ("\t", $Orgs->{'a'}{$org}{'n'}, $org), "\n");
+}
+close ($fou);
+$wos->log ('i', 'see result in nora-wos-org-list-pref.csv, nora-wos-org-list-name.csv and nora-wos-org-list-addr.csv');
+$wos->log ('i', 'done');
+exit (0);
+
+sub get_org
+{
+    my ($Orgs, $api, $rec, $add) = @_;
+
+    if ($add->{'address_spec'}{'country'}) {
+        if ($add->{'address_spec'}{'country'} eq 'Denmark') {
+            my @pref = ();
+            my @name = ();
+            foreach my $org ($api->wos_array ($add, 'address_spec/organizations/organization')) {
+                if (($org->{'pref'}) && ($org->{'pref'} eq 'Y')) {
+                    push (@pref, $org->{'content'});
+                } else {
+                    push (@name, $org->{'content'});
+                }
+            }
+            if (@pref) {
+                my $key = join (';; ', @pref);
+                if ($#pref > 0) {
+                    if (@name) {
+                        $key .= '//name:' . join ('; ', @name);
+                    }
+                    if ($add->{'address_spec'}{'full_address'}) {
+                        $key .= '//addr:' . $add->{'address_spec'}{'full_address'};
+                    }
+                }
+                $Orgs->{'u'}{$key}{'n'}++;
+            } else {
+                if (@name) {
+                    my $key = join (';; ', @name);
+                    if ($#name > 0) {
+                        $key .= '//addr:' . $add->{'address_spec'}{'full_address'};
+                    }
+                    $Orgs->{'n'}{$key}{'n'}++;
+                } else {
+                    if ($add->{'address_spec'}{'full_address'}) {
+                        $Orgs->{'a'}{$add->{'address_spec'}{'full_address'}}{'n'}++;
+                    } else {
+                        $Orgs->{'.noaddress'}++;
+                    }
+                }
+            }
+        } else {
+            $Orgs->{'.nodenmark'}++;
+        }
+    } else {
+        $Orgs->{'.nocountry'}++;
+    }
+}
+

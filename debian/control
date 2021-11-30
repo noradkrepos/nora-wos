@@ -1,0 +1,13 @@
+Source: nora-wos
+Priority: optional
+Maintainer: franck <fkybus@gmail.com>
+Build-Depends: debhelper (>= 9.0.0)
+Standards-Version: 3.6.2
+Section: libs
+
+Package: nora-wos
+Section: libs
+Architecture: all
+Depends: perl, perl-base, libdbd-sqlite3-perl, libjson-xs-perl, liblwp-protocol-https-perl, libapache2-mod-perl2
+Description: The NORA WoS handler
+    The NORA WoS backend, harvest and convert.
