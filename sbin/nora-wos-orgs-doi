@@ -1,0 +1,91 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use JSON::XS;
+use NORA::WOS;
+use NORA::WOS::DB;
+use NORA::WOS::DOI;
+
+my $wos = new NORA::WOS ();
+my $db  = new NORA::WOS::DB ();
+my $DOI = new NORA::WOS::DOI ();
+my $jxs = new JSON::XS ();
+$jxs->canonical (1);
+$jxs->allow_nonref (1);
+my $rs = $db->sql ('select ut,stamp,year,doctype,doi,title,json from doc');
+$wos->stat_start ('total');
+$wos->stat_start ('log');
+my @recs = ();
+my $rc;
+while ($rc = $rs->fetchrow_hashref) {
+    utf8::decode ($rc->{'json'});
+    my $record = $jxs->decode ($rc->{'json'});
+    $wos->counter ('recs', 1);
+    my $rec = {
+        alternativeDocId => $rc->{'ut'},
+        dateUpdated      => &dateTime ($rc->{'stamp'}),
+        source           => 'wos',
+        year             => $rc->{'year'},
+        type             => $rc->{'doctype'},
+        documentTitle    => $rc->{'title'},
+        instAffiliations => [],
+    };
+    my $doi = $DOI->normalize ($rc->{'doi'});
+    if ($doi) {
+        $rec->{'doi'} = $doi;
+    }
+    my $orgs = {};
+    foreach my $add ($wos->field ($rc->{'ut'}, $record, 'static_data/fullrecord_metadata/addresses/address_name[]'),
+                     $wos->field ($rc->{'ut'}, $record, 'static_data/fullrecord_metadata/reprint_addresses/address_name[]')) {
+        my $org;
+        foreach my $o ($wos->field ($rc->{'ut'}, $add, 'address_spec/organizations/organization[]')) {
+            if ((!$org) || ($o->{'pref'} eq 'Y')) {
+                $org = $o->{'content'};
+            }
+        }
+        if (!$org) {
+            $org = $add->{'address_spec'}{'full_address'};
+        }
+        if ($org) {
+            my ($key, $oid) = $wos->key_id ($org);
+            my ($fav, $id) = $wos->key_id ($add->{'address_spec'}{'full_address'});
+            my $country;
+            if (!($country = $add->{'address_spec'}{'country'})) {
+                $country = 'none';
+            }
+            $orgs->{$key} = {co => $country, id => $id, oldId => $oid};
+        }
+    }
+    foreach my $org (sort (keys (%{$orgs}))) {
+        push (@{$rec->{'instAffiliations'}}, {id => $orgs->{$org}{'id'}, oldId => $orgs->{$org}{'oldId'}, country => $orgs->{$org}{'co'}, name => $org});
+    }
+    push (@recs, $rec);
+    if ($wos->stat_time ('log') >= 30) {
+        $wos->stat_start ('log');
+        my $rps = $wos->counter ('recs') / $wos->stat_time ('total');
+        $wos->log ('i', '%d records, %0.2f rec/sec', $wos->counter ('recs'), $rps);
+    }
+}
+my $rps = $wos->counter ('recs') / $wos->stat_time ('total');
+$wos->log ('i', '%d records, %0.2f rec/sec', $wos->counter ('recs'), $rps);
+if (open (my $fou, '> nora-wos-orgs-doi.json')) {
+    print ($fou $jxs->encode (\@recs), "\n");
+} else {
+    $wos->log ('f', 'failed to open nora-wos-orgs-doi.json for writing: %s', $!);
+    $wos->log ('f', 'fail');
+    exit (1);
+}
+$wos->log ('i', 'elapse %s', $wos->stat_display_time ('total'));
+$wos->log ('i', 'result in nora-wos-orgs-doi.json');
+$wos->log ('i', 'done');
+exit (0);
+
+sub dateTime
+{
+    my ($time) = @_;
+
+    my ($sec, $min, $hour, $day, $mon, $year) = localtime ($time);
+    return (sprintf ('%04d-%02d-%02dT%02d:%02d:%02d', 1900 + $year, $mon + 1, $day, $hour, $min, $sec));
+}
+

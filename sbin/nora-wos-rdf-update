@@ -1,0 +1,139 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use NORA::WOS;
+
+my $args = {chunk => 500000, delete => 0, skip => 0};
+while ((@ARGV) && ($ARGV[0] =~ m/^-/)) {
+    my $arg = shift (@ARGV);
+    if (($arg eq '--chunk') || ($arg eq '-c')) {
+        $args->{'chunk'} = shift (@ARGV);
+        if ($args->{'chunk'} !~ m/^[0-9]+$/) {
+            &usage ('fatal: invalid chunk value: "%s"', $args->{'chunk'});
+        }
+        next;
+    }
+    if (($arg eq '--delete') || ($arg eq '-d')) {
+        $args->{'delete'} = 1;
+        next;
+    }
+    if (($arg eq '--skip') || ($arg eq '-s')) {
+        $args->{'skip'} = shift (@ARGV);
+        if ($args->{'skip'} !~ m/^[0-9]+$/) {
+            &usage ('fatal: invalid skip value: "%s"', $args->{'skip'});
+        }
+        next;
+    }
+    &usage ('fatal: unknown argument: %s', $arg);
+}
+my $file = shift (@ARGV);
+if (!$file) {
+    &usage ();
+}
+if (!-e $file) {
+    &usage ("fatal: file not found: '%s'", $file);
+}
+my $wos = new NORA::WOS ();
+my $graph = $file;
+$graph =~ s/^.*wos-rdf-//;
+$graph =~ s/\.nt$//;
+my $fin;
+if (!open ($fin, $file)) {
+    $wos->log ('f', "failed to open '%s' for reading: %s", $file, $!);
+    exit (1);
+}
+$wos->log ('i', 'info: counting triples...');
+while (<$fin>) {
+    $wos->counter ('total', 1);
+}
+close ($fin);
+if ($args->{'delete'}) {
+    $wos->log ('i', '%s - found %d triples to delete.', $file, $wos->counter ('total'));
+} else {
+    $wos->log ('i', '%s - found %d triples to load.', $file, $wos->counter ('total'));
+}
+if (!open ($fin, $file)) {
+    $wos->log ('f', "failed to open '%s' for reading: %s", $file, $!);
+    exit (1);
+}
+if ($args->{'skip'}) {
+    $wos->log ('i', 'skipping to %d...', $args->{'skip'});
+    while ($wos->counter ('triples-all') < $args->{'skip'}) {
+        $_ = <$fin>;
+        $wos->counter ('triples-all', 1);
+    }
+    $wos->log ('i', 'done skipping');
+}
+my $fou;
+$wos->stat_start ('start');
+while (<$fin>) {
+    if ($wos->counter ('trip') == 0) {
+        if (!open ($fou, "> /tmp/wos-rdf-update-triples.sparql")) {
+            $wos->log ('f', "failed to open '/tmp/wos-rdf-update-triples.sparql' for writing: %s", $!);
+            exit (1);
+        }
+        if ($args->{'delete'}) {
+            print ($fou "update=DELETE DATA {\n");
+        } else {
+            print ($fou "update=INSERT DATA {\n");
+        }
+        print ($fou "    GRAPH <http://localhost/data/$graph> {\n");
+    }
+#   s/([%!#\$&'()*+,\/:;=?@\[\]])/sprintf ("%%%x", ord ("$1"))/goe;
+    s/([%!#\$&'()*+,;=?@\[\]])/sprintf ("%%%x", ord ("$1"))/goe;
+    print ($fou $_);
+    $wos->counter ('trip', 1);
+    $wos->counter ('triples', 1);
+    $wos->counter ('triples-all', 1);
+    if (($wos->counter ('trip') == $args->{'chunk'}) || ($wos->counter ('triples-all') == $wos->counter ('total'))) {
+        print ($fou "    }\n");
+        print ($fou "}\n");
+        close ($fou);
+        $wos->stat_start ('load');
+        system ("curl -i --max-time 21600 --silent --output /tmp/wos-rdf-update-api-response.dat -d 'email=wos\@localhost' -d 'password=Hg3rPDyniA5V' -d '\@/tmp/wos-rdf-update-triples.sparql' 'http://localhost:8080/clarivate/api/sparqlUpdate'");
+        if (!open ($fou, '/tmp/wos-rdf-update-api-response.dat')) {
+            $wos->log ('f', "failed to open '/tmp/wos-rdf-update-api-response.dat' for reading: %s", $!);
+            exit (1);
+        }
+        my $success = 0;
+        while (<$fou>) {
+            if (m/200 SPARQL update accepted/i) {
+                $success = 1;
+                last;
+            }
+        }
+        close ($fou);
+        if (!$success) {
+            my $n = '001';
+            my $log = "/var/log/nora-wos/rdf-update-api-error-$n.log";
+            while (-e $log) {
+                $n++;
+                $log = sprintf ('/var/log/nora-wos/rdf-update-api-error-%03d.log', $n);
+            }
+            system ("mv /tmp/wos-rdf-update-api-response.dat $log");
+            $wos->log ('f', 'update failed, see %s for details', $log);
+            exit (1);
+        }
+        my $rps = $wos->counter ('triples') / ($wos->stat_time ('start') + 0.0000001);
+        if ($args->{'delete'}) {
+            $wos->log ('i', 'deleted %d triples in %3d seconds, done %d of %d (%0.2f tps), eta: %s', $wos->counter ('trip'), $wos->stat_time ('load'), $wos->counter ('triples-all'), $wos->counter ('total'), $rps, $wos->eta (($wos->counter ('total') - $wos->counter ('triples-all')) / $rps));
+        } else {
+            $wos->log ('i', 'loaded %d triples in %3d seconds, done %d of %d (%0.2f tps), eta: %s', $wos->counter ('trip'), $wos->stat_time ('load'), $wos->counter ('triples-all'), $wos->counter ('total'), $rps, $wos->eta (($wos->counter ('total') - $wos->counter ('triples-all')) / $rps));
+        }
+        $wos->counter ('trip', 'reset');
+    }
+}
+close ($fin);
+$wos->log ('i', 'done in %s (%d sec)', $wos->stat_display_time ('start'), $wos->stat_time ('start'));
+exit (0);
+
+sub usage
+{
+    my ($msg, @args) = @_;
+
+    if ($msg) {
+        printf (STDERR $msg . "\n", @args);
+    }
+    die ("usage: nora-wos-rdf-update [--chunk <size>] [--delete] [--skip <no-triples>] <rdf-nt-file>\n");
+}

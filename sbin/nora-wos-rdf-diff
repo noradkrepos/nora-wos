@@ -1,0 +1,156 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Fatal qw(open);
+use NORA::WOS;
+
+my $args = {};
+while ((@ARGV) && ($ARGV[0] =~ m/^-/)) {
+    my $arg = shift (@ARGV);
+    if (($arg eq '--csv') || ($arg eq '-c')) {
+        $args->{'csv'} = 1;
+        next;
+    }
+    if (($arg eq '--dry') || ($arg eq '-d')) {
+        $args->{'dry'} = 1;
+        next;
+    }
+    if (($arg eq '--verbose') || ($arg eq '-v')) {
+        $args->{'verbose'} = 1;
+        next;
+    }
+    die ("usage: nora-wos-rdf-diff [--dry] [--csv] [--verbose] <file-1.nt> <file-2.nt>\n");
+}
+my $wos = new NORA::WOS ();
+my ($f1, $f2) = @ARGV;
+if ((!$f1) || (!$f2)) {
+    die ("usage: nora-wos-rdf-diff [--dry] [--csv] <file-1.nt> <file-2.nt>\n");
+}
+if (($f1 !~ m/\.nt$/) || ($f1 !~ m/\.nt$/)) {
+    $wos->log ('f', 'wrong file format, only nt supported');
+    die ("usage: nora-wos-rdf-diff [--dry] [--csv] [--verbose] <file-1.nt> <file-2.nt>\n");
+}
+my @out = ();
+my $file = $f1;
+$file =~ s/.*\///;
+$file =~ s/\.nt$//;
+push (@out, $file);
+my $data = {};
+my $lineno = 0;
+if (-e $f1) {
+    if ($args->{'verbose'}) {
+        $wos->log ('i', 'loading %s...', $f1);
+    }
+    open (my $fin, $f1);
+    while (<$fin>) {
+        chomp;
+        $lineno++;
+        if (m/^[\s\t\n\r]*$/) {
+            next;
+        }
+        if (!s/\s*\.\s*$//) {
+            $wos->log ('f', 'strange line in "%s" at line %d: %s', $f1, $lineno, $_);
+            exit (1);
+        }
+        if (exists ($data->{$_})) {
+            if ($args->{'verbose'}) {
+                $wos->log ('w', 'duplicate line at line %d: %s', $lineno, $_);
+            }
+        } else {
+            $data->{$_} = 1;
+        }
+    }
+    close ($fin);
+}
+push (@out, $lineno);
+my $fadd;
+my $fdel;
+my $fileadd;
+my $filedel;
+if (!$args->{'dry'}) {
+    my @path = split ('/', $f2);
+    my $fa = pop (@path);
+    my $dir = join ('/', @path);
+    $dir =~ s/rdf/staging/;
+    if (!-e "$dir/add") {
+        system ("mkdir -p $dir/add");
+    }
+    if (!-e "$dir/del") {
+        system ("mkdir -p $dir/del");
+    }
+    $fileadd = "$dir/add/$fa";
+    $filedel = "$dir/del/$fa";
+    open ($fadd, "> $fileadd");
+    open ($fdel, "> $filedel");
+}
+my $count = {new => 0, unc => 0, del => 0};
+$lineno = 0;
+if (-e $f2) {
+    if ($args->{'verbose'}) {
+        $wos->log ('i', '    %d lines loaded', $lineno);
+        $wos->log ('i', 'loading %s...', $f2);
+    }
+    open (my $fin, $f2);
+    while (<$fin>) {
+        chomp;
+        $lineno++;
+        if (m/^[\s\t\n\r]*$/) {
+            next;
+        }
+        if (!s/\s*\.\s*$//) {
+            $wos->log ('f', 'strange line in "%s" at line %d: %s', $f1, $lineno, $_);
+            exit (1);
+        }
+        if (exists ($data->{$_})) {
+            if ($data->{$_}) {
+                $data->{$_} = 0;
+            } else {
+                if ($args->{'verbose'}) {
+                    $wos->log ('w', 'duplicate line at line %d: %s', $lineno, $_);
+                }
+            }
+            $count->{'unc'}++;
+        } else {
+            $count->{'new'}++;
+            if (!$args->{'dry'}) {
+                print ($fadd $_, " .\n");
+            }
+        }
+    }
+    close ($fin);
+}
+push (@out, $lineno);
+if ($args->{'verbose'}) {
+    $wos->log ('i', '    %d lines loaded', $lineno);
+}
+foreach my $line (keys (%{$data})) {
+    if ($data->{$line}) {
+        $count->{'del'}++;
+        if (!$args->{'dry'}) {
+            print ($fdel $line, " .\n");
+        }
+    }
+}
+if (!$args->{'dry'}) {
+    close ($fadd);
+    close ($fdel);
+    if ($count->{'del'} == 0) {
+        unlink ($filedel);
+    }
+    if ($count->{'new'} == 0) {
+        unlink ($fileadd);
+    }
+}
+push (@out, $count->{'unc'}, $count->{'del'}, $count->{'new'});
+if ($args->{'verbose'}) {
+    $wos->log ('i', 'triples: %d new, %d unchanged, %d deleted', $count->{'new'}, $count->{'unc'}, $count->{'del'});
+} else {
+    my @path = split ('/', $f2);
+    my $fa = pop (@path);
+    $wos->log ('i', '%s - triples: %d new, %d unchanged, %d deleted', $fa, $count->{'new'}, $count->{'unc'}, $count->{'del'});
+}
+if ($args->{'cvs'}) {
+    print (join ("\t", @out), "\n");
+}
+exit (0);

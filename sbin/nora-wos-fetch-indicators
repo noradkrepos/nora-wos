@@ -1,0 +1,121 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use JSON::XS;
+use NORA::WOS;
+use NORA::WOS::DB;
+use NORA::WOS::API;
+
+my $wos = new NORA::WOS ();
+my $db  = new NORA::WOS::DB ();
+my $api = new NORA::WOS::API ();
+my $incupd = &incites_update ($wos, $api);
+$db->create ();
+$wos->log ('i', 'loading current indicators');
+my ($rs, $rc);
+my $indicators = {};
+$rs = $db->sql ('select ut,incites_date from indicator');
+while ($rc = $rs->fetchrow_hashref) {
+    if ($rc->{'incites_date'} eq $incupd) {
+        $indicators->{$rc->{'ut'}} = 1;
+    } else {
+        $indicators->{$rc->{'ut'}} = 0;
+    }
+}
+$wos->log ('i', 'loading docs');
+my $tot = 0;
+my $new = 0;
+my $upd = 0;
+my $docs = {};
+$rs = $db->sql ('select ut from doc');
+while ($rc = $rs->fetchrow_hashref) {
+    $tot++;
+    if (exists ($indicators->{$rc->{'ut'}})) {
+        if (!$indicators->{$rc->{'ut'}}) {
+            $upd++;
+            $docs->{$rc->{'ut'}} = 1;
+        }
+    } else {
+        $new++;
+        $docs->{$rc->{'ut'}} = 1;
+    }
+}
+$wos->log ('i', '- loaded %d records, %d new, %d to be updated.', $tot, $new, $upd);
+$wos->log ('i', 'updating indicators');
+my @ids = keys (%{$docs});
+my $reqtot = 0;
+my $reqinc = 0;
+my $reqtime = time;
+while (@ids) {
+    my $n = 0;
+    my @rid = ();
+    while ((@ids) && ($n < 100)) {
+        my $id = shift (@ids);
+        $id =~ s/^WOS://;
+        push (@rid, $id);
+        $n++;
+    }
+    my $url = $api->url_incites ('doclevel', 'ct', @rid);
+    $reqtot++;
+    $reqinc++;
+    $wos->log ('i', 'requesting indicators for %d records, %d remaining, request no: %3d', $n, ($#ids + 1), $reqtot);
+#   $wos->log ('i', 'url: %s', $url);
+    my $json = $api->api_call ($url);
+    my $res = decode_json ($json);
+    $db->sql ('begin');
+    foreach my $grp (@{$res->{'api'}}) {
+        foreach my $ind (@{$grp->{'rval'}}) {
+            $ind->{'ACCESSION_NUMBER'} =~ s/^/WOS:/;
+            if ($docs->{$ind->{'ACCESSION_NUMBER'}}) {
+                my $rec = {ut => $ind->{'ACCESSION_NUMBER'}, incites_date => $incupd};
+                $rec->{'json'} = encode_json ($ind);
+                if (exists ($indicators->{$rec->{'ut'}})) {
+                    $db->update ('indicator', 'ut', $rec);
+                } else {
+                    $db->update ('indicator', '', $rec);
+                }
+            } else {
+                $wos->log ('e', 'could not find record to update: %s', $ind->{'ACCESSION_NUMBER'});
+            }
+        }
+    }
+    $db->sql ('end');
+    my ($sec, $min, $hour) = localtime (time);
+    if ($hour == 0) {
+        my ($sec, $min, $hour) = localtime ($reqtime);
+        if ($hour) {
+            $wos->log ('i', 'resetting the number of daily requests to zero');
+            $reqinc = 0;
+        }
+    }
+    if ($reqinc == 1000) {
+        ($sec, $min, $hour) = localtime (time);
+        my $sleep = ((24 - $hour - 1) * 3600) + ((60 - $min - 1) * 60) + (60 - $sec) + 6;
+        ($sec, $min, $hour) = localtime (time + $sleep);
+        $wos->log ('i', 'already done 1000 requests today, sleeping for %d seconds, until %d:%02d:%02d', $sleep, $hour, $min, $sec);
+        sleep ($sleep);
+        $reqinc = 0;
+    }
+    if ((time - $reqtime) < 2) {
+        sleep (2);
+    }
+    $reqtime = time;
+}
+exit (0);
+
+sub incites_update
+{
+    my ($wos, $api) = @_;
+
+    $wos->log ('i', 'checking last InCites update date');
+    my $url = $api->url_incites ('update');
+    my $json = $api->api_call ($url);
+    my $res = decode_json ($json);
+    my ($mon, $day, $year) = split ('-', $res->{'api'}[0]{'rval'}[0]{'INCITES_DATASET_UPDATED'});
+    my $date = join ('-', $year, $mon, $day);
+    my $wosindex = $res->{'api'}[0]{'rval'}[0]{'WOS_DATASET_INDEXED'};
+    $wos->log ('i', '- updated on the %s based on WoS indexed on %s', $date, $wosindex);
+    return ($date);
+}
+
