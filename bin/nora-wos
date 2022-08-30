@@ -23,15 +23,135 @@ if ($comm eq 'fetch-danish-records') {
     my $log = &log ($comm);
     my $sta = &log_start ($log);
     my $args = join (' ', @args);
-    system ("/usr/sbin/nora-wos-fetch-danish-records $args 2>&1 | tee -a $log");
+    system ("/usr/sbin/nora-wos-fetch-danish-records --all $args 2>&1 | tee -a $log");
     &log_end ($log, $sta);
     exit (0);
 }
 if ($comm eq 'update-danish-records') {
     my $log = &log ($comm);
     my $sta = &log_start ($log);
-    system ("/usr/sbin/nora-wos-update-danish-records 2>&1 | tee -a $log");
+    system ("/usr/sbin/nora-wos-fetch-danish-records 2>&1 | tee -a $log");
     &log_end ($log, $sta);
+    exit (0);
+}
+if ($comm eq 'fetch-indicators') {
+    my $log = &log ($comm);
+    my $sta = &log_start ($log);
+    my $args = join (' ', @args);
+    system ("/usr/sbin/nora-wos-fetch-indicators $args 2>&1 | tee -a $log");
+    &log_end ($log, $sta);
+    exit (0);
+}
+if ($comm eq 'generate-orgs-doi') {
+    my $log = &log ($comm);
+    my $sta = &log_start ($log);
+    my $args = join (' ', @args);
+    system ("/usr/sbin/nora-wos-orgs-doi $args 2>&1 | tee -a $log");
+    &log_end ($log, $sta);
+    exit (0);
+}
+if ($comm eq 'rdf-generate') {
+    my $log = &log ($comm);
+    my $sta = &log_start ($log);
+    system ("/usr/sbin/nora-wos-rdf-gen 2>&1 | tee -a $log");
+    &log_end ($log, $sta);
+    exit (0);
+}
+if ($comm eq 'rdf-diff') {
+    my $log = &log ($comm);
+    my $sta = &log_start ($log);
+    my $dir;
+    if (open (my $fls, "ls -d /var/lib/nora-wos/rdf/* |")) {
+        while (<$fls>) {
+            chomp;
+            $dir = $_;
+        }
+        close ($fls);
+    } else {
+        $wos->log ('f', 'failed to list files in /var/lib/nora-wos/rdf/: %s', $!);
+        exit (1);
+    }
+    my $pre;
+    if ($dir =~ m/([0-9]+)$/) {
+        my $num = $1;
+        $pre = $dir;
+        $pre =~ s/[0-9]+/sprintf ('%03d', $num - 1)/e;
+        if (!-d $pre) {
+            $wos->log ('f', 'previous directory not found: %s', $pre);
+            exit (1);
+        }
+    } else {
+        $wos->log ('f', 'unexpected format for: %s', $dir);
+        exit (1);
+    }
+    if (open (my $fls, "ls $dir |")) {
+        while (<$fls>) {
+            chomp;
+            if (m/\.nt$/) {
+                system ("/usr/sbin/nora-wos-rdf-diff $pre/$_ $dir/$_ 2>&1 | tee -a $log");
+            } else {
+                $wos->log ('i', 'skipping file: %s', $_);
+            }
+        }
+        close ($fls);
+    } else {
+        $wos->log ('f', 'failed to list files in /var/lib/nora-wos/rdf/: %s', $!);
+        exit (1);
+    }
+    &log_end ($log, $sta);
+    exit (0);
+}
+if ($comm eq 'rdf-update') {
+    if (!@args) {
+        &usage ();
+    }
+    my $run = sprintf ('%03d', $args[0]);
+    shift (@args);
+    my $args = join (' ', @args);
+    if ((!$run) || (!-d "/var/lib/nora-wos/staging/$run")) {
+        &usage ('could not find a valid run in /var/lib/nora-wos/staging/ using run number: "%s"', $args[0]);
+    }
+    my $log = &log ($comm);
+    my $sta = &log_start ($log);
+    if (open (my $fls, "ls -d /var/lib/nora-wos/staging/$run/del/* 2> /dev/null |")) {
+        while (<$fls>) {
+            chomp;
+            system ("/usr/sbin/nora-wos-rdf-update --chunk 10000 --delete $args $_ 2>&1 | tee -a $log");
+        }
+        close ($fls);
+    } else {
+        $wos->log ('f', 'failed to list files in /var/lib/nora-wos/staging/%s/del/: %s', $run, $!);
+        exit (1);
+    }
+    if (open (my $fls, "ls -d /var/lib/nora-wos/staging/$run/add/* 2> /dev/null |")) {
+        while (<$fls>) {
+            chomp;
+            system ("/usr/sbin/nora-wos-rdf-update $args $_ 2>&1 | tee -a $log");
+        }
+        close ($fls);
+    } else {
+        $wos->log ('f', 'failed to list files in /var/lib/nora-wos/staging/%s/add/: %s', $run, $!);
+        exit (1);
+    }
+    &log_end ($log, $sta);
+    exit (0);
+}
+if ($comm eq 'view-rec') {
+    my $ut = shift (@args);
+    $ut =~ s/^wos-/WOS:/;
+    if ($ut !~ m/^WOS:/) {
+        $ut = 'WOS:' . $ut;
+    }
+    system ('/usr/sbin/nora-wos-view-rec', $ut);
+    exit (0);
+}
+if ($comm eq 'view-ind') {
+    my $ut = shift (@args);
+    $ut =~ s/^wos-/WOS:/;
+    if ($ut !~ m/^WOS:/) {
+        $ut = 'WOS:' . $ut;
+    }
+    system ('/usr/sbin/nora-wos-view-ind', $ut);
     exit (0);
 }
 die ("fatal: missing command: $comm\n");
@@ -100,9 +220,22 @@ sub map_comm
         },
         fetch => {
             'danish-records'       => 'fetch-danish-records',
+            'indicators'           => 'fetch-indicators',
         },
         update => {
             'danish-records'       => 'update-danish-records',
+        },
+        generate => {
+            'orgs-doi'             => 'generate-orgs-doi',
+        },
+        rdf => {
+            'generate'             => 'rdf-generate',
+            'diff'                 => 'rdf-diff',
+            'update'               => 'rdf-update',
+        },
+        view => {
+            'record'               => 'view-rec',
+            'indicators'           => 'view-ind',
         },
     };
     my $match = 0;
@@ -148,9 +281,18 @@ sub usage
     }
     warn ("usage: nora-wos system     backup\n\n");
 
-    warn ("       nora-wos fetch      danish-records\n\n");
+    warn ("       nora-wos fetch      danish-records\n");
+    warn ("       nora-wos update     danish-records\n");
+    warn ("       nora-wos fetch      indicators\n\n");
 
-    warn ("       nora-wos update     danish-records\n\n");
+    warn ("       nora-wos generate   orgs-doi\n\n");
+
+    warn ("       nora-wos rdf        generate\n");
+    warn ("       nora-wos rdf        diff\n");
+    warn ("       nora-wos rdf        update <run-number>\n\n");
+
+    warn ("       nora-wos view       record <UT>\n");
+    warn ("       nora-wos view       indicators <UT>\n\n");
     exit (1);
 }
 
