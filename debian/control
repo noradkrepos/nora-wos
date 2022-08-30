@@ -8,6 +8,6 @@ Section: libs
 Package: nora-wos
 Section: libs
 Architecture: all
-Depends: perl, perl-base, libdbd-sqlite3-perl, libjson-xs-perl, liblwp-protocol-https-perl, libapache2-mod-perl2
+Depends: perl, perl-base, libdbd-sqlite3-perl, libjson-xs-perl, liblwp-protocol-https-perl
 Description: The NORA WoS handler
     The NORA WoS backend, harvest and convert.

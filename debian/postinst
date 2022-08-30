@@ -15,6 +15,7 @@ case "$1" in
         chmod 2775 $WDIR
         find /var/lib/nora-wos/ -type d | xargs chgrp nora-wos
         find /var/lib/nora-wos/ -type d | xargs chmod 2775
+        chmod 640 /etc/nora-wos/wos.tab
         if [ -d /san -a -d /var/lib/nora-wos ]
         then
             if [ ! -e /san/nora-wos ]
