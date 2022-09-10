@@ -188,6 +188,12 @@ sub pub_article
     foreach $s ($wos->field ($id, $rec, 'static_data/fullrecord_metadata/keywords/keyword[]')) {
         $n3->add_text ('keywords', "wos:pub-$id", 'vivo:freetextKeyword', $s);
     }
+    foreach $s ($wos->field ($id, $rec, 'dynamic_data/cluster_related/identifiers/identifier[type=isbn]/value'), 
+                $wos->field ($id, $rec, 'dynamic_data/cluster_related/identifiers/identifier[type=eisbn]/value')) {
+        if (&isbn13 ($s)) {
+            $n3->add_text ('articles', "wos:pub-$id", 'bibo:isbn13', $s);
+        }
+    }
 }
 
 sub pub_journal
@@ -251,10 +257,10 @@ sub pub_orgs
         my ($key, $orgid);
         if ($org->{'country'}) {
             ($key, $orgid) = $wos->key_id ($orgname . ' ' . $org->{'country'});
-            warn ("using '$orgname $org->{'country'}', key: '$key', id: '$orgid'\n");
+#           warn ("using '$orgname $org->{'country'}', key: '$key', id: '$orgid'\n");
         } else {
             ($key, $orgid) = $wos->key_id ($orgname . ' none');
-            warn ("using '$orgname none', key: '$key', id: '$orgid'\n");
+#           warn ("using '$orgname none', key: '$key', id: '$orgid'\n");
         }
         $n3->add ('orgs', "wos:afid-$orgid", 'a', 'foaf:Organization');
         $n3->add_text ('orgs', "wos:afid-$orgid", 'rdfs:label', $orgname);
@@ -429,6 +435,18 @@ sub id_key
     $name = lc ($name);
     $name =~ s/[^[:alnum:]]+/-/g;
     return ($name);
+}
+
+sub isbn13
+{
+    my ($isbn) = @_;
+
+    $isbn =~ s/[^0-9]//g;
+    if (length ($isbn) == 13) {
+        return (1);
+    } else {
+        return (0);
+    }
 }
 
 sub error
