@@ -2,6 +2,8 @@ package NORA::WOS::DB;
 
 use strict;
 use warnings;
+use NORA::WOS;
+use JSON::XS;
 use DBI qw(:sql_types);
 
 sub new
@@ -15,6 +17,7 @@ sub new
         $self->{'dbfile'} = 'nora-wos.sqlite3';
     }
     $self->{'dbh'} = DBI->connect ('dbi:SQLite:' . $self->{'dbfile'}, undef, undef, {PrintError => 1, RaiseError => 0});
+    $self->{'wos'} = new NORA::WOS ();
     return (bless ($self, $class));
 }
 
@@ -192,13 +195,13 @@ sub update
 {
     my ($self, $table, $key, $rec) = @_;
 
-    if ($rec->{$key}) {
+    if (($key) && ($rec->{$key})) {
         $rec->{'stamp'} = time;
         my @fld = ();
         my @val = ();
-        foreach my $key (sort (keys (%{$rec}))) {
-            push (@fld, $key . '=?');
-            push (@val, $self->trim ($rec->{$key}));
+        foreach my $fld (sort (keys (%{$rec}))) {
+            push (@fld, $fld . '=?');
+            push (@val, $self->trim ($rec->{$fld}));
         }
         if ($rec->{$key} =~ m/^[0-9]+$/) {
             $self->sql ("update $table set " . join (',', @fld) . " where $key=" . $rec->{$key}, @val);
@@ -210,10 +213,10 @@ sub update
         my @fld = ();
         my @pla = ();
         my @val = ();
-        foreach my $key (sort (keys (%{$rec}))) {
-            push (@fld, $key);
+        foreach my $fld (sort (keys (%{$rec}))) {
+            push (@fld, $fld);
             push (@pla, '?');
-            push (@val, $self->trim ($rec->{$key}));
+            push (@val, $self->trim ($rec->{$fld}));
         }
         $self->sql ("insert into $table (" . join (',', @fld) . ') VALUES (' . join (',', @pla) . ')', @val);
     }
@@ -264,6 +267,88 @@ sub execute
         die ('fatal: ' . $sth->errstr);
     } else {
         return (1);
+    }
+}
+
+sub ct_micro
+{
+    my ($self, $ut) = @_;
+
+    if (!exists ($self->{'ct_micro'})) {
+        my $oamap = {
+            'free to read'    => 'publisherfree2read',
+            'gold'            => 'publisherfullgold',
+            'gold hybrid'     => 'publisherhybridgold',
+            'green accepted'  => 'repository',
+            'green only'      => 'repository',
+            'green published' => 'repository',
+            'green submitted' => 'repository',
+        };
+        $self->{'wos'}->log ('i', 'loading indicator micro CT');
+        my $jxs = JSON::XS->new->allow_nonref->canonical(1);
+        my $rs = $self->sql ('select ut,json from indicator');
+        my $rc;
+        while ($rc = $rs->fetchrow_hashref) {
+            my $ind = $jxs->decode ($rc->{'json'});
+            foreach my $cat (@{$ind->{'PERCENTILE'}}) {
+                if ($cat->{'LEVEL'} == 3) {
+                    my $ct = $cat->{'SUBJECT'};
+                    $ct =~ s/^\s+//;
+                    $ct =~ s/\s+.*//;
+                    $ct =~ s/[^0-9\.]//g;
+                    if ($ct) {
+                        if (exists ($self->{'ct_micro'}{$rc->{'ut'}})) {
+                            push (@{$self->{'ct_micro'}{$rc->{'ut'}}}, $ct);
+                        } else {
+                            $self->{'ct_micro'}{$rc->{'ut'}} = [$ct];
+                        }
+                    }
+                }
+            }
+            if ($ind->{'OPEN_ACCESS'}{'OA_FLAG'}) {
+                my $types = {all => 1};
+                foreach my $status (@{$ind->{'OPEN_ACCESS'}{'STATUS'}}) {
+                    my $type = lc ($status->{'TYPE'});
+                    $type =~ s/[^a-z]+/ /g;
+                    $type =~ s/^ //;
+                    $type =~ s/ $//;
+                    if ($oamap->{$type}) {
+                        $types->{$oamap->{$type}} = 1;
+                    } else {
+                        $self->{'wos'}->log ('w', 'unknown OA type: %s (%s)', $type, $status->{'TYPE'});
+                    }
+                }
+                $self->{'open_access'}{$rc->{'ut'}} = join (' ', sort (keys (%{$types})));
+            }
+        }
+        $self->{'wos'}->log ('i', '- done');
+    }
+    if ($ut) {
+        if (exists ($self->{'ct_micro'}{$ut})) {
+            return (@{$self->{'ct_micro'}{$ut}});
+        } else {
+            return ();
+        }
+    } else {
+        return ();
+    }
+}
+
+sub open_access
+{
+    my ($self, $ut) = @_;
+
+    if (!exists ($self->{'open_access'})) {
+        $self->ct_micro ($ut);
+    }
+    if ($ut) {
+        if (exists ($self->{'open_access'}{$ut})) {
+            return ($self->{'open_access'}{$ut});
+        } else {
+            return ();
+        }
+    } else {
+        return ();
     }
 }
 
