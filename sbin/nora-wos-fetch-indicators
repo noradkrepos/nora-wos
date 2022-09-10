@@ -63,6 +63,13 @@ while (@ids) {
 #   $wos->log ('i', 'url: %s', $url);
     my $json = $api->api_call ($url);
     my $res = decode_json ($json);
+    while ($res->{'http_error'}) {
+        $wos->log ('w', 'HTTP errors, sleeping 1 hour');
+        sleep (3600);
+        $wos->log ('i', 'requesting indicators for %d records, %d remaining, request no: %3d', $n, ($#ids + 1), $reqtot);
+        $json = $api->api_call ($url);
+        $res = decode_json ($json);
+    }
     $db->sql ('begin');
     foreach my $grp (@{$res->{'api'}}) {
         foreach my $ind (@{$grp->{'rval'}}) {
@@ -88,14 +95,6 @@ while (@ids) {
             $wos->log ('i', 'resetting the number of daily requests to zero');
             $reqinc = 0;
         }
-    }
-    if ($reqinc == 1000) {
-        ($sec, $min, $hour) = localtime (time);
-        my $sleep = ((24 - $hour - 1) * 3600) + ((60 - $min - 1) * 60) + (60 - $sec) + 6;
-        ($sec, $min, $hour) = localtime (time + $sleep);
-        $wos->log ('i', 'already done 1000 requests today, sleeping for %d seconds, until %d:%02d:%02d', $sleep, $hour, $min, $sec);
-        sleep ($sleep);
-        $reqinc = 0;
     }
     if ((time - $reqtime) < 2) {
         sleep (2);
