@@ -221,6 +221,9 @@ sub clean_issn
 {
     my ($issn) = @_;
 
+    if (!$issn) {
+        return (undef);
+    }
     $issn = uc ($issn);
     $issn =~ s/[^0-9X]//g;
     if ($issn =~ m/^[0-9]{7}[0-9X]$/) {
@@ -245,7 +248,14 @@ sub pub_orgs
         if (!$orgname) {
             $orgname = $org->{'full_address'};
         }
-        my ($key, $orgid) = $wos->key_id ($orgname);
+        my ($key, $orgid);
+        if ($org->{'country'}) {
+            ($key, $orgid) = $wos->key_id ($orgname . ' ' . $org->{'country'});
+            warn ("using '$orgname $org->{'country'}', key: '$key', id: '$orgid'\n");
+        } else {
+            ($key, $orgid) = $wos->key_id ($orgname . ' none');
+            warn ("using '$orgname none', key: '$key', id: '$orgid'\n");
+        }
         $n3->add ('orgs', "wos:afid-$orgid", 'a', 'foaf:Organization');
         $n3->add_text ('orgs', "wos:afid-$orgid", 'rdfs:label', $orgname);
         $n3->add_text ('orgs', "wos:afid-$orgid", 'vivo:identifier', $orgid);
@@ -362,24 +372,26 @@ sub pub_subject
                 $code = $map->{'oecd'}{'rmap'}{$key};
             }
         }
-        if ($map->{'oecd'}{'map'}{$code}) {
-            foreach my $num (@{$map->{'oecd'}{'map'}{$code}{'m'}}, @{$map->{'oecd'}{'map'}{$code}{'s'}}) {
-                $n3->add ('articles', "wos:pub-$id", 'vivo:hasSubjectArea', "wos:subject-oecd-$num");
-                if ($num !~ m/^[0-9]$/) {
-                    $n3->add ('subjects', "wos:subject-oecd-$num", 'a', 'osrap:CategoryOECD');
-                    $n3->add_text ('subjects', "wos:subject-oecd-$num", 'rdfs:label', $num . ' ' . $map->{'oecd'}{'oecd'}{$num});
+        if ($code) {
+            if ($map->{'oecd'}{'map'}{$code}) {
+                foreach my $num (@{$map->{'oecd'}{'map'}{$code}{'m'}}, @{$map->{'oecd'}{'map'}{$code}{'s'}}) {
+                    $n3->add ('articles', "wos:pub-$id", 'vivo:hasSubjectArea', "wos:subject-oecd-$num");
+                    if ($num !~ m/^[0-9]$/) {
+                        $n3->add ('subjects', "wos:subject-oecd-$num", 'a', 'osrap:CategoryOECD');
+                        $n3->add_text ('subjects', "wos:subject-oecd-$num", 'rdfs:label', $num . ' ' . $map->{'oecd'}{'oecd'}{$num});
+                    }
+                }
+            } else {
+                if (!exists ($map->{'done'}{$code})) {
+                    $map->{'done'}{$code} = 1;
+#               $wos->log ('i', 'no mapping for OECD with subject: %s', $code);
                 }
             }
-        } else {
-            if (!exists ($map->{'done'}{$code})) {
-                $map->{'done'}{$code} = 1;
-#               $wos->log ('i', 'no mapping for OECD with subject: %s', $code);
-            }
+            $n3->add ('articles', "wos:pub-$id", 'vivo:hasSubjectArea', "wos:subject-wos-$code");
+            $n3->add ('subjects', "wos:subject-wos-$code", 'a', 'skos:Concept');
+            $n3->add_text ('subjects', "wos:subject-wos-$code", 'rdfs:label', $sub->{'content'});
+            $n3->add_text ('subjects', "wos:subject-wos-$code", 'vivo:identifier', $code);
         }
-        $n3->add ('articles', "wos:pub-$id", 'vivo:hasSubjectArea', "wos:subject-wos-$code");
-        $n3->add ('subjects', "wos:subject-wos-$code", 'a', 'skos:Concept');
-        $n3->add_text ('subjects', "wos:subject-wos-$code", 'rdfs:label', $sub->{'content'});
-        $n3->add_text ('subjects', "wos:subject-wos-$code", 'vivo:identifier', $code);
     }
     foreach my $code ($db->ct_micro ($rec->{'UID'})) {
         if ($map->{'sdg'}{$code}) {
