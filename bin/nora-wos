@@ -20,6 +20,12 @@ if ($comm eq 'system-backup') {
     exit (0);
 }
 if ($comm eq 'fetch-danish-records') {
+    print (STDERR "Do you really want to harvest all WoS records? This should only be done if there is a major change in WoS! [y/N]: ");
+    my $ans = <STDIN>;
+    if ($ans !~ m/^y$/i) {
+        warn ("Aborting\n");
+        exit (0);
+    }
     my $log = &log ($comm);
     my $sta = &log_start ($log);
     my $args = join (' ', @args);
