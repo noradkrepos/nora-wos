@@ -1,0 +1,85 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use JSON::XS;
+use Fatal qw(open);
+
+while ((@ARGV) && ($ARGV[0] =~ /^[\-\+]/)) {
+    my $arg = shift (@ARGV);
+    if (($arg eq '-index') || ($arg eq '-i')) {
+        warn ("disabling indexing...\n");
+        &index ();
+        next;
+    }
+    if (($arg eq '+index') || ($arg eq '+i')) {
+        warn ("enabling indexing...\n");
+        &index (1);
+        next;
+    }
+    if (($arg eq '-reasoner') || ($arg eq '-r')) {
+        warn ("disabling reasoner...\n");
+        &infer ();
+        next;
+    }
+    if (($arg eq '+reasoner') || ($arg eq '+r')) {
+        warn ("enabling reasoner...\n");
+        &infer (1);
+        next;
+    }
+    die ("usage: nora-dki-index-infer [-index | +index] [-reasoner | +reasoner]\n");
+}
+&index_infer ();
+exit (0);
+
+sub index_infer
+{
+    system ('wget', '--quiet',  '-O', '/tmp/nora-wos-index-infer.json', 'http://localhost/clarivate/vds/indexingInference/status');
+    my $rec = &load_json ('/tmp/nora-wos-index-infer.json');
+    printf("Index: %s, Re-Index: %s, Reasoner: %s, Re-Computing: %s\n", &to_bool ($rec->{'searchIndexerRegisteredForChanges'}),
+           &to_bool ($rec->{'searchIndexerIsIndexing'}), &to_bool ($rec->{'reasonerRegisteredForChanges'}), &to_bool ($rec->{'reasonerIsRecomputing'}));
+
+}
+
+sub index
+{
+    my ($true) = @_;
+
+    if ($true) {
+        system ("wget --quiet -O /dev/null --method=POST 'http://localhost/clarivate/vds/indexingInference/searchIndexer/register'");
+    } else {
+        system ("wget --quiet -O /dev/null --method=POST 'http://localhost/clarivate/vds/indexingInference/searchIndexer/unregister'");
+    }
+}
+
+sub infer
+{
+    my ($true) = @_;
+
+    if ($true) {
+        system ("wget --quiet -O /dev/null --method=POST 'http://localhost/clarivate/vds/indexingInference/reasoner/register'");
+    } else {
+        system ("wget --quiet -O /dev/null --method=POST 'http://localhost/clarivate/vds/indexingInference/reasoner/unregister'");
+    }
+}
+
+sub load_json
+{
+    my ($file) = @_;
+
+    open (my $fin, $file);
+    my $rec = JSON::XS->new->allow_nonref->decode (join ('', <$fin>));
+    close ($fin);
+    return ($rec);
+}
+
+sub to_bool
+{
+    my ($v) = @_;
+
+    if ($v) {
+        return ('True');
+    } else {
+        return ('False');
+    }
+}
