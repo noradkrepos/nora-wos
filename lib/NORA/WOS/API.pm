@@ -6,13 +6,15 @@ use NORA::WOS;
 use LWP::UserAgent;
 use HTTP::Request;
 use IO::Socket::SSL qw(SSL_VERIFY_NONE);
+use JSON::XS;
 
 sub new
 {
-    my ($class) = @_;
+    my ($class, $verbose) = @_;
 
-    my $self = {};
+    my $self = {verbose => $verbose};
     $self->{'wos'} = new NORA::WOS ();
+    $self->{'jxs'} = JSON::XS->new->allow_nonref->canonical(1);
     if (open (my $fin, '/etc/nora-wos/wos.tab')) {
         while (<$fin>) {
             chomp;
@@ -23,6 +25,41 @@ sub new
     } else {
         die ("fatal: failed to open /etc/nora-wos/wos.tab for reading: $!\n");
     }
+    $self->{'normalize'} = [
+        'dynamic_data/cluster_related/identifiers/identifier',
+        'static_data/contributors/contributor',
+        'static_data/fullrecord_metadata/abstracts/abstract/abstract_text/p',
+        'static_data/fullrecord_metadata/addresses/address_name',
+        'static_data/fullrecord_metadata/addresses/address_name[]/address_spec/organizations/organization',
+        'static_data/fullrecord_metadata/addresses/address_name[]/address_spec/suborganizations/suborganization',
+        'static_data/fullrecord_metadata/addresses/address_name[]/address_spec/zip',
+        'static_data/fullrecord_metadata/addresses/address_name[]/names/name',
+        'static_data/fullrecord_metadata/addresses/address_name[]/names/name[]/data-item-ids/data-item-id',
+        'static_data/fullrecord_metadata/category_info/subjects/subject',
+        'static_data/fullrecord_metadata/category_info/headings/headings',
+        'static_data/fullrecord_metadata/category_info/subheadings/subheading',
+        'static_data/fullrecord_metadata/fund_ack/fund_text/p',
+        'static_data/fullrecord_metadata/fund_ack/grants/grant',
+        'static_data/fullrecord_metadata/fund_ack/grants/grant[]/grant_ids/grant_id',
+        'static_data/fullrecord_metadata/keywords/keyword',
+        'static_data/fullrecord_metadata/languages/language',
+        'static_data/fullrecord_metadata/normalized_doctypes/doctype',
+        'static_data/fullrecord_metadata/reprint_addresses/address_name',
+        'static_data/fullrecord_metadata/reprint_addresses/address_name[]/address_spec/organizations/organization',
+        'static_data/fullrecord_metadata/reprint_addresses/address_name[]/address_spec/suborganizations/suborganization',
+        'static_data/fullrecord_metadata/reprint_addresses/address_name[]/address_spec/zip',
+        'static_data/fullrecord_metadata/reprint_addresses/address_name[]/names/name',
+        'static_data/item/book_desc',
+        'static_data/item/book_notes/book_note',
+        'static_data/item/keywords_plus/keyword',
+        'static_data/summary/EWUID/edition',
+        'static_data/summary/conferences/conference',
+        'static_data/summary/conferences/conference[]/sponsors/sponsor',
+        'static_data/summary/doctypes/doctype',
+        'static_data/summary/names/name',
+        'static_data/summary/names/name[]/data-item-ids/data-item-id',
+        'static_data/summary/titles/title',
+    ];
     return (bless ($self, $class));
 }
 
@@ -184,11 +221,18 @@ sub doctype_code
 
 sub url_incites
 {
-    my ($self, $type, @args) = @_;
+    my ($self, $type, $schema, @args) = @_;
 
-    my $base = 'https://api.clarivate.com/api/incites';
+    my $base = 'https://incites-api.clarivate.com/api/incites';
     if ($type =~ m/doclevel/i) {
-        return ($base . '/DocumentLevelMetricsByUT/json?esci=y&ver=2&UT=' . join (',', @args));
+        if ((!$schema) || ($schema eq 'wos')) {
+            return ($base . '/DocumentLevelMetricsByUT/json?ver=2&schema=wos&esci=y&UT=' . join (',', @args));
+        } elsif ($schema eq 'ct') {
+            return ($base . '/DocumentLevelMetricsByUT/json?ver=2&schema=ct&esci=y&UT=' . join (',', @args));
+        } else {
+            $self->{'wos'}->log ('f', 'url_incites: unknown InCites request schema: "%s"', $schema);
+            die ();
+        }
     }
     if ($type =~ m/update/i) {
         return ($base . '/InCitesLastUpdated/json');
@@ -213,27 +257,30 @@ sub api_call
         my $s = $rs->header ('Client-Aborted');
         if ((defined ($s)) && ($s !~ m/^\s*$/)) {
             if ($s eq 'die') {
-                printf (STDERR "fatal: Client-Aborted while harvesting '%s': %s\n", $url, $s);
+                printf (STDERR "error: Client-Aborted while harvesting '%s': %s\n", $url, $s);
+                return ($self->json_error ('500', "Client-Aborted while harvesting '%s': %s", $url, $s));
             } else {
-                printf (STDERR "fatal: unknown Client-Aborted header while harvesting '%s': %s\n", $url, $s);
+                printf (STDERR "error: unknown Client-Aborted header while harvesting '%s': %s\n", $url, $s);
+                return ($self->json_error ('500', "unknown Client-Aborted header while harvesting '%s': %s", $url, $s));
             }
-            exit (1);
         }
         $s = $rs->header ('X-Died');
         if ((defined ($s)) && ($s !~ m/^\s*$/)) {
             $s =~ s/ at \/.*//;
             if ($s =~ m/eof when chunk header expected/i) {
-                printf (STDERR "fatal: connection lost '%s'\n", $url);
+                printf (STDERR "error: connection lost '%s'\n", $url);
+                return ($self->json_error ('408', "connection lost '%s'", $url));
             } elsif ($s =~ m/read timeout/i) {
-                printf (STDERR "fatal: connection timeout '%s'\n", $url);
+                printf (STDERR "error: connection timeout '%s'\n", $url);
+                return ($self->json_error ('408', "connection timeout '%s'", $url));
             } else {
-                printf (STDERR "fatal: unknown X-Died header while harvesting '%s': %s", $url, $s);
+                printf (STDERR "error: unknown X-Died header while harvesting '%s': %s", $url, $s);
+                return ($self->json_error ('408', "unknown X-Died header while harvesting '%s': %s", $url, $s));
             }
-            exit (1);
         }
     } else {
-        printf (STDERR "fatal: HTTP error: %d : %s\n", $rs->code, $rs->message);
-        exit (1);
+        printf (STDERR "error: HTTP error: %d : %s\n", $rs->code, $rs->message);
+        return ($self->json_error ($rs->code, $rs->message));
     }
     return ($rs->content);
 }
@@ -300,6 +347,57 @@ sub http_get
     return ($rs);
 }
 
+sub normalize_record
+{
+    my ($self, $rec, $id, $path) = @_;
+
+    if (($path) && ($self->{'verbose'})) {
+        printf (STDERR "%s: path: %s, json: %s\n\n", $id, $path, $self->{'jxs'}->encode ($rec));
+    }
+    if ($path) {
+        my $rc = $rec;
+        my @pa = split ('/', $path);
+        my $pa;
+        while ($pa = shift (@pa)) {
+            if ($pa =~ s/\[\]$//) {
+                if (!exists ($rc->{$pa})) {
+                    return ();
+                }
+                if (ref ($rc->{$pa}) eq 'ARRAY') {
+                    foreach my $r (@{$rc->{$pa}}) {
+                        $self->normalize_record ($r, $id, join ('/', @pa));
+                    }
+                } else {
+                    die ("normalize error: $id path not array: $pa\n");
+                }
+            } else {
+                if (ref ($rc) ne 'HASH') {
+                    printf (STDERR "id: %s, path: %s, ref: %s, json: %s\n", $id, $pa, ref ($rc), $self->{'jxs'}->encode ($rc));
+                }
+                if (!exists ($rc->{$pa})) {
+                    return ();
+                }
+                if (@pa) {
+                    if (ref ($rc->{$pa}) ne 'HASH') {
+                        printf (STDERR "fixing non-hash - id: %s, path: %s, ref: %s, json: %s\n", $id, $pa, ref ($rc), $self->{'jxs'}->encode ($rc));
+                        $rc->{$pa} = {};
+                        return ();
+                    }
+                    $rc = $rc->{$pa};
+                } else {
+                    if (ref ($rc->{$pa}) ne 'ARRAY') {
+                        $rc->{$pa} = [$rc->{$pa}];
+                    }
+                }
+            }
+        }
+    } else {
+        foreach my $path (@{$self->{'normalize'}}) {
+            $self->normalize_record ($rec, $rec->{'UID'}, $path);
+        }
+    }
+}
+
 sub wos_array
 {
     my ($self, $rec, $path) = @_;
@@ -336,6 +434,17 @@ sub url_encode
     $txt =~ s/([^-_\.\!\~\*\'\(\)\s0-9A-Za-z])/sprintf ('%%%02X', ord ($1))/geo;
     $txt =~ s/\s/+/g;
     return ($txt);
+}
+
+sub json_error
+{
+    my ($self, $code, $msg, @args) = @_;
+
+    if (@args) {
+        $msg = sprintf ($msg, @args);
+    }
+    my $rec = {http_error => {code => $code, message => $msg}};
+    return ($self->{'jxs'}->encode ($rec));
 }
 
 1;
