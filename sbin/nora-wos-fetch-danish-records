@@ -10,10 +10,15 @@ use NORA::WOS::API;
 my $base = 'https://api.clarivate.com/api/wos/';
 my $query = 'databaseId=WOS';
 
+my $start = time;
 my ($sec, $min, $hour, $day, $mon, $year) = localtime (time);
-my $args = {yearFrom => 2011, yearTo => (1900 + $year)};
+my $args = {all => 0, yearFrom => 2011, yearTo => (1900 + $year)};
 while ((@ARGV) && ($ARGV[0] =~ m/^-/)) {
     my $arg = shift (@ARGV);
+    if (($arg eq '--all') || ($arg eq '-a')) {
+        $args->{'all'} = 1;
+        next;
+    }
     if (($arg eq '--year-from') || ($arg eq '-f')) {
         my $year = shift (@ARGV);
         if (($year < $args->{'yearFrom'}) || ($year > $args->{'yearTo'})) {
@@ -36,34 +41,56 @@ my $wos = new NORA::WOS ();
 my $db  = new NORA::WOS::DB ();
 my $api = new NORA::WOS::API ();
 $db->create ();
-for (my $year = $args->{'yearFrom'}; $year <= $args->{'yearTo'} ; $year++) {
-    my $url = $base . '?' . $query . "&count=0&firstRecord=1&usrQuery=" . $api->url_encode ("CU=(Denmark) AND PY=($year)");
-    &fetch_records ($wos, $db, $api, $url);
+my $incDate;
+if (!$args->{'all'}) {
+    my $rs = $db->sql ('select max(stamp) as time from updates');
+    my $rc;
+    if ($rc = $rs->fetchrow_hashref) {
+        $incDate = $wos->date ($rc->{'time'}) . '+' . $wos->date ();
+        $wos->log ('i', 'doing incremental update with date range: %s', $incDate);
+        sleep (2);
+    } else {
+        $wos->log ('w', 'no previous run detected, switching to full harvest');
+        $args->{'all'} = 1;
+    }
 }
+for (my $year = $args->{'yearFrom'}; $year <= $args->{'yearTo'} ; $year++) {
+    my $url;
+    if ($args->{'all'}) {
+        $url = $base . '?' . $query . "&count=0&firstRecord=1&usrQuery=" . $api->url_encode ("CU=(Denmark) AND PY=($year)");
+        $wos->log ('i', 'search for Danish records for year %d (%s)', $year, $url);
+    } else {
+        $url = $base . '?' . $query . "&modifiedTimeSpan=$incDate&count=0&firstRecord=1&usrQuery=" . $api->url_encode ("CU=(Denmark) AND PY=($year)");
+        $wos->log ('i', 'incremental search for Danish records for year %d (%s)', $year, $url);
+    }
+    &fetch_records ($wos, $db, $api, $base, $url);
+}
+$wos->log ('i', 'setting update to %d - %s', $start, $wos->date ($start));
+my $rc = {stamp => $start, upd => $wos->date ($start)};
+$db->update ('updates', undef, $rc);
 exit (0);
 
 sub fetch_records
 {
-    my ($wos, $db, $api, $url) = @_;
+    my ($wos, $db, $api, $base, $url) = @_;
 
-    $wos->log ('i', 'searching for Danish records (%s)', $url);
     my $json = $api->api_call ($url);
     my $res = decode_json ($json);
     my $qid = $res->{'QueryResult'}{'QueryID'};
     my $totrec = $res->{'QueryResult'}{'RecordsFound'};
     $wos->log ('i', 'found %d records in result set %d', $totrec, $qid);
     my $off = 1;
-    my $n = 0;
-    my $u = 0;
+    my $new = 0;
+    my $upd = 0;
     my $recs = {};
-    my $sth = $db->sql ("select ut from doc");
+    my $rs = $db->sql ("select ut from doc");
     my $rc;
-    while ($rc = $sth->fetchrow_hashref) {
+    while ($rc = $rs->fetchrow_hashref) {
         $recs->{$rc->{'ut'}} = 1;
     }
     while ($off <= $totrec) {
         $url = $base . 'query/' . $qid . '?count=100&firstRecord=' . $off;
-        $wos->log ('i', 'fetching 100 records - %d of %d (%s)', ($n + $u), $totrec, $url);
+        $wos->log ('i', 'fetching 100 records - %d of %d (%s)', ($new + $upd), $totrec, $url);
         $json = $api->api_call ($url);
         $res = decode_json ($json);
         $db->sql ('begin');
@@ -73,18 +100,18 @@ sub fetch_records
             $rc->{'json'} = encode_json ($rec);
             $api->add_core ($rec, $rc);
             if ($recs->{$rc->{'ut'}}) {
-                $u++;
+                $upd++;
                 $db->update ('doc', 'ut', $rc);
             } else {
-                $n++;
+                $new++;
                 $recs->{$rc->{'ut'}} = 1;
-                $db->update ('doc', '-', $rc);
+                $db->update ('doc', undef, $rc);
             }
         }
         $db->sql ('end');
         $off += 100;
     }
-    $wos->log ('i', 'added %d documents, update %d.', $n, $u);
+    $wos->log ('i', 'added %d documents, updated %d.', $new, $upd);
 }
 
 sub usage
@@ -94,6 +121,6 @@ sub usage
     if ($msg) {
         printf (STDERR $msg . "\n", @args);
     }
-    die ("usage: nora-wos-fetch-danish-records [--year-from <year>] [--year-to <year>]\n");
+    die ("usage: nora-wos-fetch-danish-records [--all] [--year-from <year>] [--year-to <year>]\n");
 }
 
