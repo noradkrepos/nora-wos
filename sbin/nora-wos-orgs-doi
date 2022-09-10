@@ -49,16 +49,17 @@ while ($rc = $rs->fetchrow_hashref) {
         }
         if ($org) {
             my ($key, $oid) = $wos->key_id ($org);
-            my ($fav, $id) = $wos->key_id ($add->{'address_spec'}{'full_address'});
+            my ($key2, $oid2) = $wos->key_id ($add->{'address_spec'}{'full_address'});
             my $country;
             if (!($country = $add->{'address_spec'}{'country'})) {
                 $country = 'none';
             }
-            $orgs->{$key} = {co => $country, id => $id, oldId => $oid};
+            my ($fav, $id) = $wos->key_id ($org . ' ' . $country);
+            $orgs->{$key} = {co => $country, id => $id, oldId => $oid, oldId2 => $oid2};
         }
     }
     foreach my $org (sort (keys (%{$orgs}))) {
-        push (@{$rec->{'instAffiliations'}}, {id => $orgs->{$org}{'id'}, oldId => $orgs->{$org}{'oldId'}, country => $orgs->{$org}{'co'}, name => $org});
+        push (@{$rec->{'instAffiliations'}}, {id => $orgs->{$org}{'id'}, oldId => $orgs->{$org}{'oldId'}, oldId2 => $orgs->{$org}{'oldId2'}, country => $orgs->{$org}{'co'}, name => $org});
     }
     push (@recs, $rec);
     if ($wos->stat_time ('log') >= 30) {
