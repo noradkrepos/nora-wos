@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use NORA::WOS;
 
-my $args = {chunk => 500000, delete => 0, skip => 0};
+my $args = {chunk => 50000, delete => 0, skip => 0};
 while ((@ARGV) && ($ARGV[0] =~ m/^-/)) {
     my $arg = shift (@ARGV);
     if (($arg eq '--chunk') || ($arg eq '-c')) {
