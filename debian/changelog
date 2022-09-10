@@ -1,3 +1,12 @@
+nora-wos (0.02-00) unstable; urgency=low
+
+  * Commited all changes so far, we be use for current update and then
+    updated to pass it on to Nelson and Brian.
+    
+    GIT revision: 03e3111f0034ab024a3756770cffedb5dbe30842
+
+ -- kybus <fkybus@gmail.com>  Sat, 10 Sep 2022 19:39:56 +0200
+
 nora-wos (0.01-00) unstable; urgency=low
 
   * Development version
