@@ -37,49 +37,18 @@ $wos->log ('i', '%d no country, %d not denmark, %d no address', $Orgs->{'.nocoun
 delete ($Orgs->{'.nodenmark'});
 delete ($Orgs->{'.nocountry'});
 delete ($Orgs->{'.noaddress'});
-open (my $fou, '> nora-wos-org-list-pref.csv');
+open (my $fou, '> nora-wos-org-list.csv');
 foreach my $org (sort {$Orgs->{'u'}{$b}{'n'} <=> $Orgs->{'u'}{$a}{'n'}} keys (%{$Orgs->{'u'}})) {
-    my ($oname, $name, $addr) = split ('//', $org);
-    if ($addr) {
-        if ($addr =~ s/^name://) {
-            my $s = $name;
-            $name = $addr;
-            $addr = $s;
-        }
-        $addr =~ s/^addr://;
-    } else {
-        $addr = '';
-    }
-    if ($name) {
-        if ($name =~ s/^addr://) {
-            my $s = $addr;
-            $addr = $name;
-            $name = $s;
-        }
-        $name =~ s/^name://;
-    } else {
-        $name = '';
-    }
-    print ($fou join ("\t", $Orgs->{'u'}{$org}{'n'}, $oname, $name, $addr), "\n");
+    print ($fou join ("\t", 'preferred', $Orgs->{'u'}{$org}{'n'}, $org), "\n");
 }
-close ($fou);
-open ($fou, '> nora-wos-org-list-name.csv');
 foreach my $org (sort {$Orgs->{'n'}{$b}{'n'} <=> $Orgs->{'n'}{$a}{'n'}} keys (%{$Orgs->{'n'}})) {
-    my ($name, $addr) = split ('//', $org);
-    if ($addr) {
-        $addr =~ s/^addr://;
-    } else {
-        $addr = '';
-    }
-    print ($fou join ("\t", $Orgs->{'n'}{$org}{'n'}, $name, $addr), "\n");
+    print ($fou join ("\t", 'regular', $Orgs->{'n'}{$org}{'n'}, $org), "\n");
 }
-close ($fou);
-open ($fou, '> nora-wos-org-list-addr.csv');
 foreach my $org (sort {$Orgs->{'a'}{$b}{'n'} <=> $Orgs->{'a'}{$a}{'n'}} keys (%{$Orgs->{'a'}})) {
-    print ($fou join ("\t", $Orgs->{'a'}{$org}{'n'}, $org), "\n");
+    print ($fou join ("\t", 'address', $Orgs->{'a'}{$org}{'n'}, $org), "\n");
 }
 close ($fou);
-$wos->log ('i', 'see result in nora-wos-org-list-pref.csv, nora-wos-org-list-name.csv and nora-wos-org-list-addr.csv');
+$wos->log ('i', 'see result in nora-wos-org-list.csv');
 $wos->log ('i', 'done');
 exit (0);
 
@@ -99,23 +68,14 @@ sub get_org
                 }
             }
             if (@pref) {
-                my $key = join (';; ', @pref);
-                if ($#pref > 0) {
-                    if (@name) {
-                        $key .= '//name:' . join ('; ', @name);
-                    }
-                    if ($add->{'address_spec'}{'full_address'}) {
-                        $key .= '//addr:' . $add->{'address_spec'}{'full_address'};
-                    }
+                foreach my $key (@pref) {
+                    $Orgs->{'u'}{$key}{'n'}++;
                 }
-                $Orgs->{'u'}{$key}{'n'}++;
             } else {
                 if (@name) {
-                    my $key = join (';; ', @name);
-                    if ($#name > 0) {
-                        $key .= '//addr:' . $add->{'address_spec'}{'full_address'};
+                    foreach my $key (@name) {
+                        $Orgs->{'n'}{$key}{'n'}++;
                     }
-                    $Orgs->{'n'}{$key}{'n'}++;
                 } else {
                     if ($add->{'address_spec'}{'full_address'}) {
                         $Orgs->{'a'}{$add->{'address_spec'}{'full_address'}}{'n'}++;
