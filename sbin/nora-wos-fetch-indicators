@@ -15,18 +15,25 @@ $db->create ();
 $wos->log ('i', 'loading current indicators');
 my ($rs, $rc);
 my $indicators = {};
+my $tot = 0;
+my $upd = 0;
 $rs = $db->sql ('select ut,incites_date from indicator');
 while ($rc = $rs->fetchrow_hashref) {
+    $tot++;
     if ($rc->{'incites_date'} eq $incupd) {
         $indicators->{$rc->{'ut'}} = 1;
     } else {
         $indicators->{$rc->{'ut'}} = 0;
+        $upd++;
     }
 }
+if (($upd / $tot) < 0.2) {
+    $wos->log ('i', 'Incites is up-to-date, check https://incites.help.clarivate.com/Content/dataset-updates.htm for next update');
+    exit (0);
+}
 $wos->log ('i', 'loading docs');
-my $tot = 0;
+$tot = $upd = 0;
 my $new = 0;
-my $upd = 0;
 my $docs = {};
 $rs = $db->sql ('select ut from doc');
 while ($rc = $rs->fetchrow_hashref) {
