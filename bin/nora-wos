@@ -285,18 +285,25 @@ sub usage
     if ($msg) {
         printf (STDERR "\n" . $msg . "\n\n", @args);
     }
-    warn ("usage: nora-wos system     backup\n\n");
+    warn ("usage:\n\n");
 
-    warn ("       nora-wos fetch      danish-records\n");
-    warn ("       nora-wos update     danish-records\n");
-    warn ("       nora-wos fetch      indicators\n\n");
+    warn ("       DATA MANAGEMENT\n");
+    warn ("       ---------------\n");
+    warn ("       nora-wos system     backup\n\n");
 
-    warn ("       nora-wos generate   orgs-doi\n\n");
+    warn ("       nora-wos fetch      danish-records   (All records, only first time or for format changes)\n\n");
+    warn ("       nora-wos update     danish-records   (On the 19th each month)\n");
+    warn ("       nora-wos generate   orgs-doi         (generate data for mapping)\n\n");
+    warn ("       nora-wos fetch      indicators       (after update of Incites)\n\n\n");
 
+    warn ("       RDF & VIVO PROCESSING\n");
+    warn ("       ---------------------\n");
     warn ("       nora-wos rdf        generate\n");
     warn ("       nora-wos rdf        diff\n");
-    warn ("       nora-wos rdf        update <run-number>\n\n");
+    warn ("       nora-wos rdf        update <run-number>\n\n\n");
 
+    warn ("       MISCELLANEOUS\n");
+    warn ("       -------------\n");
     warn ("       nora-wos view       record <UT>\n");
     warn ("       nora-wos view       indicators <UT>\n\n");
     exit (1);
