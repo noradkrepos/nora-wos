@@ -441,12 +441,15 @@ sub isbn13
 {
     my ($isbn) = @_;
 
-    $isbn =~ s/[^0-9]//g;
-    if (length ($isbn) == 13) {
-        return (1);
-    } else {
-        return (0);
+    if ($isbn) {
+        $isbn =~ s/[^0-9]//g;
+        if (length ($isbn) == 13) {
+            return (1);
+        } else {
+            return (0);
+        }
     }
+    return (0);
 }
 
 sub error
