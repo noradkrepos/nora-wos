@@ -1,3 +1,11 @@
+nora-wos (0.03-00) unstable; urgency=low
+
+  * A start of split between Data management and RDF processing
+    
+    GIT revision: ea5350a52e2fec127f8a599ec4c691531708e44e
+
+ -- kybus <fkybus@gmail.com>  Thu, 22 Sep 2022 10:59:14 +0200
+
 nora-wos (0.02-00) unstable; urgency=low
 
   * Commited all changes so far, we be use for current update and then
