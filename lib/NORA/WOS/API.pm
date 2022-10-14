@@ -219,11 +219,18 @@ sub doctype_code
     return ($code);
 }
 
+sub url_wos
+{
+    my ($self) = @_;
+
+    return ($self->{'conf'}{'wos-api'});
+}
+
 sub url_incites
 {
     my ($self, $type, $schema, @args) = @_;
 
-    my $base = 'https://incites-api.clarivate.com/api/incites';
+    my $base = $self->{'conf'}{'incites-api'};
     if ($type =~ m/doclevel/i) {
         if ((!$schema) || ($schema eq 'wos')) {
             return ($base . '/DocumentLevelMetricsByUT/json?ver=2&schema=wos&esci=y&UT=' . join (',', @args));
@@ -308,7 +315,7 @@ sub http_get
         $ua = $self->{'ua'};
     } else {
         $ua = new LWP::UserAgent;
-        $ua->agent ('RAP-ADH/0.2');
+        $ua->agent ('NORA-WOS/1.0');
         $ua->timeout (180);
         $ua->ssl_opts (SSL_verify_mode => SSL_VERIFY_NONE, verify_hostnames => 0);
         $self->{'ua'} = $ua;
@@ -317,7 +324,7 @@ sub http_get
         $redirect = 0;
     }
     my $authkey;
-    if ($url =~ m|/incites/|) {
+    if ($url =~ m/\/(incites|DocumentLevelMetricsByUT|InCitesLastUpdated)\//) {
         $authkey = $self->{'conf'}{'incites-key'};
     } else {
         $authkey = $self->{'conf'}{'wos-key'};

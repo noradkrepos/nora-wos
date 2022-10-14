@@ -7,9 +7,6 @@ use NORA::WOS;
 use NORA::WOS::DB;
 use NORA::WOS::API;
 
-my $base = 'https://api.clarivate.com/api/wos/';
-my $query = 'databaseId=WOS';
-
 my $start = time;
 my ($sec, $min, $hour, $day, $mon, $year) = localtime (time);
 my $args = {all => 0, yearFrom => 2011, yearTo => (1900 + $year)};
@@ -40,6 +37,8 @@ while ((@ARGV) && ($ARGV[0] =~ m/^-/)) {
 my $wos = new NORA::WOS ();
 my $db  = new NORA::WOS::DB ();
 my $api = new NORA::WOS::API ();
+my $base = $api->url_wos ();
+my $query = 'databaseId=WOS';
 $db->create ();
 my $incDate;
 if (!$args->{'all'}) {

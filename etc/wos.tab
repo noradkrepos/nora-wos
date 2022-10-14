@@ -1,2 +1,4 @@
 wos-key     <your-wos-key>
+wos-api     https://api.clarivate.com/api/wos/
 incites-key <your-incites-key>
+incites-api https://incites-api.clarivate.com/api/incites
