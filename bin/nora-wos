@@ -59,7 +59,7 @@ if ($comm eq 'generate-orgs-doi') {
 if ($comm eq 'rdf-generate') {
     my $log = &log ($comm);
     my $sta = &log_start ($log);
-    system ("/usr/sbin/nora-wos-rdf-gen 2>&1 | tee -a $log");
+    system ("/usr/sbin/sbin/nora-wos-rdf-gen-mongo 2>&1 | tee -a $log");
     &log_end ($log, $sta);
     exit (0);
 }
