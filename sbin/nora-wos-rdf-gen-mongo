@@ -1,0 +1,511 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use JSON::XS;
+use NORA::WOS;
+use NORA::WOS::Mongo;
+use NORA::WOS::N3;
+
+my $DocType = &doctype ();
+my $args = {'-' => 0, id => 0, ttl => 0};
+while ((@ARGV) && ($ARGV[0] =~ m/^-/)) {
+    my $arg = shift (@ARGV);
+    if ($arg eq '-') {
+        $args->{'-'} = 1;
+        next;
+    }
+    if (($arg eq '--id') || ($arg eq '-i')) {
+        $args->{'id'} = shift (@ARGV);
+        if ($args->{'id'} !~ m/^WOS:[0-9]+$/) {
+            warn ("fatal: invalid ID: '$args->{'id'}'\n");
+            die ("usage: wos-rdf [--id <WOS-UT>] [--ttl] [-]\n");
+        } 
+        next;
+    }
+    if (($arg eq '--ttl') || ($arg eq '-t')) {
+        $args->{'ttl'} = 1;
+        next;
+    }
+    warn ("fatal: unknown argument: $arg\n");
+    die ("usage: wos-rdf [--id <WOS-UT>] [--ttl] [-]\n");
+}
+my $wos = new NORA::WOS ();
+my $mon  = new NORA::WOS::Mongo ();
+$mon->ct_micro ();
+$mon->open_access ();
+my $jxs = new JSON::XS ();
+$jxs->canonical (1);
+$jxs->allow_nonref (1);
+my $mapping = {};
+$mapping->{'for'}  = &load_json ($wos, $jxs, '/etc/nora-wos/wos-for-mapping.json');
+$mapping->{'oecd'} = &load_json ($wos, $jxs, '/etc/nora-wos/wos-oecd-mapping.json');
+$mapping->{'sdg'}  = &load_json ($wos, $jxs, '/etc/nora-wos/wos-sdg-mapping.json');
+my $n3 = new NORA::WOS::N3 ();
+my $total = $mon->count ('doc');
+my $start = time;
+my $rs;
+if ($args->{'id'}) {
+    $rs = $mon->find ('doc', {ut => $args->{'id'}});
+} else {
+    $rs = $mon->find ('doc');
+}
+my $recs = 0;
+my $rc;
+while ($rc = $rs->next ()) {
+    utf8::decode ($rc->{'json'});
+    my $rec = $jxs->decode ($rc->{'json'});
+    $rec->{'ID'} = lc ($rec->{'UID'});
+    $rec->{'ID'} =~ s/:/-/g;
+    &pub_year ($wos, $n3, $rec);
+    &pub_article ($wos, $n3, $rec);
+    &pub_journal ($wos, $n3, $rec);
+    &pub_orgs ($wos, $n3, $rec);
+    &pub_authors ($wos, $n3, $rec);
+    &pub_subject ($wos, $n3, $mon, $mapping, $rec);
+    $recs++;
+    if (($recs % 10000) == 0) {
+        my $rps = $recs / (time - $start);
+        my $eta = time + int (($total - $recs) / $rps);
+        $wos->log ('i', 'processed %d of %d records (%0.2f rps), ETA: %s', $recs, $total, $rps, &eta ($eta));
+    }
+}
+if (!$args->{'id'}) {
+    my $rps = $recs / (time - $start);
+    $wos->log ('i', 'processed %d of %d records (%0.2f rps)', $recs, $total, $rps);
+}
+my $filebase;
+if ($args->{'-'}) {
+    $filebase = '-';
+} else {
+    my $dir = '001';
+    while (-d "/var/lib/nora-wos/rdf/$dir") {
+        $dir = sprintf ('%03d', $dir + 1);
+    }
+    mkdir ("/var/lib/nora-wos/rdf/$dir", 0775);
+    $filebase = "/var/lib/nora-wos/rdf/$dir/wos-rdf";
+    if ($args->{'ttl'}) {
+        $wos->log ('i', 'writing RDF to %s-*.ttl', $filebase);
+    } else {
+        $wos->log ('i', 'writing RDF to %s-*.nt', $filebase);
+    }
+}
+if ($args->{'ttl'}) {
+    $n3->output ($filebase);
+} else {
+    $n3->output_nt ($filebase);
+}
+$wos->log ('i', 'done');
+exit (0);
+
+sub eta
+{
+    my ($time) = @_;
+    my ($sec, $min, $hour, $day, $mon, $year) = localtime ($time);
+    return (sprintf ('%04d-%02d-%02d %02d:%02d:%02d', 1900 + $year, $mon + 1, $day, $hour, $min, $sec));
+}
+
+sub pub_year
+{
+    my ($wos, $n3, $rec) = @_;
+
+    my $id = $rec->{'ID'};
+    my $year;
+    if (!($year = $wos->field ($id, $rec, 'static_data/summary/pub_info/pubyear'))) {
+        &error ($rec, 'could not find publication year: static_data/summary/pub_info/pubyear');
+        return;
+    }
+    if ($year !~ m/^(19|20)[0-9]{2}$/) {
+        &error ($rec, 'invalid publication year format: "%s"', $year);
+        return;
+    }
+
+    $n3->add ('dtv', "wos:dtv-$year", 'a', 'vivo:DateTimeValue');
+    $n3->add ('dtv', "wos:dtv-$year", 'vivo:dateTimePrecision', 'vivo:yearPrecision');
+    $n3->add_text ('dtv', "wos:dtv-$year", 'vivo:dateTime', "$year-01-01T00:00:00");
+    $n3->add ('articles', "wos:pub-$id", 'vivo:dateTimeValue', "wos:dtv-$year");
+}
+
+sub pub_article
+{
+    my ($wos, $n3, $rec) = @_;
+
+    my $id = $rec->{'ID'};
+    my $match = 0;
+    my @doctypes = ();
+    foreach my $s ($wos->field ($id, $rec, 'static_data/summary/doctypes/doctype[]')) {
+        push (@doctypes, $s);
+        if ($DocType->{$s}) {
+            $n3->add ('articles', "wos:pub-$id", 'a', $DocType->{$s});
+            $n3->add ('articles', "wos:pub-$id", 'a', $DocType->{'doc'});
+            $match++;
+        }
+        $n3->add_text ('articles', "wos:pub-$id", 'norao:ctodoctype', $s);
+    }
+    if (!$match) {
+        $wos->log ('w', 'no mapping for doctype(s): %s', join (';; ', @doctypes));
+        $n3->add ('articles', "wos:pub-$id", 'a', $DocType->{'doc'});
+    }
+    $n3->add_text ('articles', "wos:pub-$id", 'rdfs:label', $wos->field ($id, $rec, 'static_data/summary/titles/title[type=item]/content'));
+    $n3->add_text ('articles', "wos:pub-$id", 'vivo:identifier', $rec->{'UID'});
+    $n3->add_text ('articles-abs', "wos:pub-$id", 'bibo:abstract', $wos->field ($id, $rec, 'static_data/fullrecord_metadata/abstracts/abstract/abstract_text/p[]'));
+    $n3->add_text ('articles', "wos:pub-$id", 'bibo:doi', $wos->field ($id, $rec, 'dynamic_data/cluster_related/identifiers/identifier[type=doi]/value'));
+    $n3->add_text ('articles', "wos:pub-$id", 'bibo:issue', $wos->field ($id, $rec, 'static_data/summary/pub_info/issue'));
+    $n3->add_text ('articles', "wos:pub-$id", 'bibo:volume', $wos->field ($id, $rec, 'static_data/summary/pub_info/vol'));
+    my $s = $wos->field ($id, $rec, 'static_data/summary/publishers/publisher/names/name/unified_name');
+    if (!$s) {
+        $s = $wos->field ($id, $rec, 'static_data/summary/publishers/publisher/names/name/display_name');
+    }
+    if ($s) {
+        my $pid = 'wos:publisher-' . &id_key ($s);
+        $n3->add ('articles', "wos:pub-$id", 'vivo:publisher', $pid);
+        $n3->add ('publishers', $pid, 'a', 'vivo:Publisher');
+        $n3->add_text ('publishers', $pid, 'rdfs:label', $s);
+    }
+    ($s) =  $wos->field_variant ($id, $rec, 'language');
+    if ($s) {
+        $n3->add_text ('articles', "wos:pub-$id", 'norao:language', $s);
+    }
+    my $n = 0;
+    foreach my $name ($wos->field ($id, $rec, 'static_data/summary/names/name[]/display_name')) {
+        $n++;
+    }
+    $n3->add_text ('articles', "wos:pub-$id", 'norao:authorsCount', $n);
+    $n3->add_text ('articles', "wos:pub-$id", 'opera:authorsCount', $n);
+    foreach $s ($wos->field ($id, $rec, 'static_data/fullrecord_metadata/fund_ack/grants/grant[]/grant_agency')) {
+        my ($key, $fid) = $wos->key_id ($s);
+        $n3->add ('articles', "wos:pub-$id", 'opera:hasFunder', "wos:funding-agency-$fid");
+        $n3->add ('funders', "wos:funding-agency-$fid", 'a', 'vivo:FundingOrganization');
+        $n3->add_text ('funders', "wos:funding-agency-$fid", 'rdfs:label', $s);
+        $n3->add_text ('funders', "wos:funding-agency-$fid", 'skos:prefLabel', $s);
+    }
+    if ($s = $wos->field ($id, $rec, 'static_data/summary/pub_info/page/begin')) {
+        $n3->add_text ('articles', "wos:pub-$id", 'bibo:pageStart', $s);
+        $n3->add_text ('articles', "wos:pub-$id", 'bibo:pageEnd', $wos->field ($id, $rec, 'static_data/summary/pub_info/page/end'));
+    }
+    $n3->add_text ('articles', "wos:pub-$id", 'osrap:referenceCount', $wos->field ($id, $rec, 'static_data/fullrecord_metadata/refs/count'));
+    $n3->add_text ('articles', "wos:pub-$id", 'osrap:timesCited', $wos->field ($id, $rec, 'dynamic_data/citation_related/tc_list/silo_tc/local_count'));
+    foreach $s ($wos->field ($id, $rec, 'static_data/fullrecord_metadata/keywords/keyword[]')) {
+        $n3->add_text ('keywords', "wos:pub-$id", 'vivo:freetextKeyword', $s);
+    }
+    foreach $s ($wos->field ($id, $rec, 'dynamic_data/cluster_related/identifiers/identifier[type=isbn]/value'), 
+                $wos->field ($id, $rec, 'dynamic_data/cluster_related/identifiers/identifier[type=eisbn]/value')) {
+        if (&isbn13 ($s)) {
+            $n3->add_text ('articles', "wos:pub-$id", 'bibo:isbn13', $s);
+        }
+    }
+}
+
+sub pub_journal
+{
+    my ($wos, $n3, $rec) = @_;
+
+    my $id = $rec->{'ID'};
+    my $issn = &clean_issn ($wos->field ($id, $rec, 'dynamic_data/cluster_related/identifiers/identifier[type=issn]/value'));
+    my $eissn = &clean_issn ($wos->field ($id, $rec, 'dynamic_data/cluster_related/identifiers/identifier[type=eissn]/value'));
+    my ($title) = $wos->field ($id, $rec, 'static_data/summary/titles/title[type=source]/content');
+    my $jid;
+    my $key;
+    if ($issn) {
+        ($key, $jid) = $wos->key_id ($issn . $title);
+    } elsif ($eissn) {
+        ($key, $jid) = $wos->key_id ($eissn . $title);
+    } elsif ($title) {
+        ($key, $jid) = $wos->key_id ($title);
+    } else {
+        return ();
+    }
+    $jid = 'wos:journal-' . $jid;
+    $n3->add ('articles', "wos:pub-$id", 'vivo:hasPublicationVenue', $jid);
+    $n3->add ('journals', $jid, 'a', 'bibo:Journal');
+    $n3->add_text ('journals', $jid, 'rdfs:label', $title);
+    $n3->add_text ('journals', $jid, 'bibo:issn', $issn);
+    $n3->add_text ('journals', $jid, 'bibo:eissn', $eissn);
+}
+
+sub clean_issn
+{
+    my ($issn) = @_;
+
+    if (!$issn) {
+        return (undef);
+    }
+    $issn = uc ($issn);
+    $issn =~ s/[^0-9X]//g;
+    if ($issn =~ m/^[0-9]{7}[0-9X]$/) {
+        return (substr ($issn, 0, 4) . '-' . substr ($issn, 4));
+    } else {
+        return (undef);
+    }
+}
+
+sub pub_orgs
+{
+    my ($wos, $n3, $rec) = @_;
+
+    my $id = $rec->{'ID'};
+    foreach my $org ($wos->field ($id, $rec, 'static_data/fullrecord_metadata/addresses/address_name[]/address_spec')) {
+        my $orgname;
+        foreach my $name ($wos->field ($id, $org, 'organizations/organization[]')) {
+            if ((!defined ($orgname)) || ($name->{'pref'} eq 'Y')) {
+                $orgname = $name->{'content'};
+            }
+        }
+        if (!$orgname) {
+            $orgname = $org->{'full_address'};
+        }
+        my ($key, $orgid);
+        if ($org->{'country'}) {
+            ($key, $orgid) = $wos->key_id ($orgname . ' ' . $org->{'country'});
+#           warn ("using '$orgname $org->{'country'}', key: '$key', id: '$orgid'\n");
+        } else {
+            ($key, $orgid) = $wos->key_id ($orgname . ' none');
+#           warn ("using '$orgname none', key: '$key', id: '$orgid'\n");
+        }
+        $n3->add ('orgs', "wos:afid-$orgid", 'a', 'foaf:Organization');
+        $n3->add_text ('orgs', "wos:afid-$orgid", 'rdfs:label', $orgname);
+        $n3->add_text ('orgs', "wos:afid-$orgid", 'vivo:identifier', $orgid);
+        my $grpid = "wos:pub-$id-group-" . $org->{'addr_no'};
+        $n3->add ('articles', "wos:pub-$id", 'norao:hasAuthorGroup', $grpid);
+        $n3->add ('articles', $grpid, 'a', 'norao:AuthorGroup');
+        $n3->add ('articles', $grpid, 'norao:relatedToOrganization', "wos:afid-$orgid");
+        $n3->add_text ('articles', $grpid, 'vivo:rank', $org->{'addr_no'});
+        $n3->add_text ('articles', $grpid, 'norao:addressPart', $org->{'full_address'});
+        $n3->add_text ('articles', $grpid, 'norao:city', $org->{'city'});
+        $n3->add_text ('articles', $grpid, 'norao:countryName', $org->{'country'});
+        $n3->add_text ('articles', $grpid, 'norao:countryCode', uc ($wos->country_code ($org->{'country'})));
+        if ($org->{'full_address'}) {
+            my ($key, $id) = $wos->key_id ($org->{'full_address'});
+            $n3->add ('orgs', "wos:corg-$id", 'a', 'norao:CompositeOrganization');
+            $n3->add_text ('orgs', "wos:corg-$id", 'rdfs:label', $org->{'full_address'});
+            $n3->add ('articles', $grpid, 'norao:relatedToCompositeOrganization', "wos:corg-$id");
+        }
+    }
+}
+
+sub pub_authors
+{
+    my ($wos, $n3, $rec) = @_;
+
+    my $id = $rec->{'ID'};
+    foreach my $au ($wos->field ($id, $rec, 'static_data/summary/names/name[]')) {
+        my $rank = $au->{'seq_no'};
+        my $auid;
+        if ($au->{'role'} =~ m/corp/) {
+            my ($key, $aid) = $wos->key_id ($au->{'display_name'});
+            $auid = 'wos:auth-corp-' . $aid;
+        } else {
+            if ($au->{'orcid_id'}) {
+                $auid = 'wos:auth-id-' . $au->{'orcid_id'};
+            } elsif ($au->{'r_id'}) {
+                $auid = 'wos:auth-id-' . $au->{'r_id'};
+            } elsif ($au->{'daisng_id'}) {
+                $auid = 'wos:auth-id-' . $au->{'daisng_id'};
+            } else {
+#               if ($au->{'role'} eq 'author') {
+#                   $wos->log ('w', 'missing author-id in %s', $id);
+#               }
+                my ($key, $aid) = $wos->key_id ($au->{'display_name'});
+                $auid = 'wos:auth-id-' . $aid;
+            }
+        }
+        $n3->add ('articles', "wos:pub-$id-authorship-$rank", 'a', 'vivo:Authorship');
+        if (($au->{'reprint'}) && ($au->{'reprint'} eq 'Y')) {
+            $n3->add ('articles', "wos:pub-$id-authorship-$rank", 'vivo:isCorrespondingAuthor', 'true');
+        } else {
+            $n3->add ('articles', "wos:pub-$id-authorship-$rank", 'vivo:isCorrespondingAuthor', 'false');
+        }
+        $n3->add_text ('articles', "wos:pub-$id-authorship-$rank", 'vivo:rank', $rank);
+        $n3->add ('articles', "wos:pub-$id-authorship-$rank", 'vivo:relates', $auid, "wos:pub-$id");
+        if ($au->{'role'} =~ m/corp/) {
+            $n3->add ('authors', $auid, 'a', 'foaf:Group');
+            $n3->add_text ('authors', $auid, 'rdfs:label', $au->{'display_name'});
+        } else {
+            if ($au->{'addr_no'}) {
+                foreach my $gid (split (' ', $au->{'addr_no'})) {
+                    $n3->add ('articles', "wos:pub-$id-authorship-$rank", 'norao:inAuthorGroup', "wos:pub-$id-group-$gid");
+                }
+            }
+            $n3->add_text ('articles', "wos:pub-$id-authorship-$rank", 'norao:authorNameAsListed', $au->{'display_name'});
+            $n3->add ('authors', $auid, 'a', 'foaf:Person');
+            $n3->add ('authors', $auid, 'obo:ARG_2000028', "$auid-vcard");
+            $n3->add_text ('authors', $auid, 'rdfs:label', $au->{'display_name'});
+            if ($au->{'orcid_id'}) {
+                $n3->add ('authors', $auid, 'vivo:orcidId', 'orcid:' . $au->{'orcid_id'});
+            }
+            $n3->add ('authors', "$auid-vcard", 'a', 'vcard:Individual');
+            $n3->add ('authors', "$auid-vcard", 'vcard:hasName', "$auid-vcard-name");
+            $n3->add ('authors', "$auid-vcard", 'vcard:hasName', "$auid-vcard-name");
+            $n3->add ('authors', "$auid-vcard-name", 'a', 'vcard:Name');
+            $n3->add_text ('authors', "$auid-vcard-name", 'vcard:familyName', $au->{'last_name'});
+            $n3->add_text ('authors', "$auid-vcard-name", 'vcard:givenName', $au->{'first_name'});
+        }
+    }
+}
+sub pub_subject
+{
+    my ($wos, $n3, $mon, $map, $rec) = @_;
+
+    my $id = $rec->{'ID'};
+    foreach my $j11 ($wos->field ($id, $rec, 'static_data/summary/titles/title[type=abbrev_11]/content')) {
+        if (!defined ($j11)) {
+            next;
+        }
+        if ($map->{'for'}{$j11}) {
+            foreach my $sub (@{$map->{'for'}{$j11}}) {
+                my ($num) = split (' ', $sub);
+                $n3->add ('articles', "wos:pub-$id", 'vivo:hasSubjectArea', "wos:subject-for-$num");
+                $n3->add ('subjects', "wos:subject-for-$num", 'a', 'osrap:CategoryFOR');
+                $n3->add_text ('subjects', "wos:subject-for-$num", 'rdfs:label', $sub);
+            }
+        } else {
+            if (!exists ($map->{'done'}{$j11})) {
+                $map->{'done'}{$j11} = 1;
+#               $wos->log ('i', 'no mapping for FOR with title: %s', $j11);
+            }
+        }
+    }
+    foreach my $sub ($wos->field ($id, $rec, 'static_data/fullrecord_metadata/category_info/subjects/subject[]')) {
+        my $code;
+        if ($sub->{'code'}) {
+            $code = $sub->{'code'};
+        } else {
+            my $key = lc ($sub->{'content'});
+            $key =~ s/[^a-z]+/ /g;
+            $key =~ s/^\s+//;
+            $key =~ s/\s+$//;
+            if ($map->{'oecd'}{'rmap'}{$key}) {
+                $code = $map->{'oecd'}{'rmap'}{$key};
+            }
+        }
+        if ($code) {
+            if ($map->{'oecd'}{'map'}{$code}) {
+                foreach my $num (@{$map->{'oecd'}{'map'}{$code}{'m'}}, @{$map->{'oecd'}{'map'}{$code}{'s'}}) {
+                    $n3->add ('articles', "wos:pub-$id", 'vivo:hasSubjectArea', "wos:subject-oecd-$num");
+                    if ($num !~ m/^[0-9]$/) {
+                        $n3->add ('subjects', "wos:subject-oecd-$num", 'a', 'osrap:CategoryOECD');
+                        $n3->add_text ('subjects', "wos:subject-oecd-$num", 'rdfs:label', $num . ' ' . $map->{'oecd'}{'oecd'}{$num});
+                    }
+                }
+            } else {
+                if (!exists ($map->{'done'}{$code})) {
+                    $map->{'done'}{$code} = 1;
+#               $wos->log ('i', 'no mapping for OECD with subject: %s', $code);
+                }
+            }
+            $n3->add ('articles', "wos:pub-$id", 'vivo:hasSubjectArea', "wos:subject-wos-$code");
+            $n3->add ('subjects', "wos:subject-wos-$code", 'a', 'skos:Concept');
+            $n3->add_text ('subjects', "wos:subject-wos-$code", 'rdfs:label', $sub->{'content'});
+            $n3->add_text ('subjects', "wos:subject-wos-$code", 'vivo:identifier', $code);
+        }
+    }
+    foreach my $code ($mon->ct_micro ($rec->{'UID'})) {
+        if ($map->{'sdg'}{$code}) {
+            foreach my $sdg (@{$map->{'sdg'}{$code}}) {
+                my ($num) = split (' ', $sdg);
+                $num =~ s/[^0-9]//g;
+                $n3->add ('articles', "wos:pub-$id", 'vivo:hasSubjectArea', "wos:subject-sdg-$num");
+                $n3->add ('subjects', "wos:subject-sdg-$num", 'a', 'osrap:CategorySDG');
+                $n3->add_text ('subjects', "wos:subject-sdg-$num", 'rdfs:label', $sdg);
+            }
+        } else {
+            if (!exists ($map->{'done'}{$code})) {
+                $map->{'done'}{$code} = 1;
+#               $wos->log ('i', 'no mapping for SDG with CT: %s', $code);
+            }
+        }
+    }
+    my $oa = $mon->open_access ($rec->{'UID'});
+    if ($oa) {
+        $n3->add ('articles', "wos:pub-$id", 'osrap:openAccessCategory', 'wos:open-access-category-open');
+        $n3->add_text ('articles', "wos:pub-$id", 'osrap:freeToReadStatus', $oa);
+        $n3->add ('oa', 'wos:open-access-category-open', 'a', 'osrap:openAccessCategory');
+        $n3->add_text ('oa', 'wos:open-access-category-open', 'rdfs:label', 'Open');
+    } else {
+        $n3->add ('articles', "wos:pub-$id", 'osrap:openAccessCategory', 'wos:open-access-category-closed');
+        $n3->add ('oa', 'wos:open-access-category-closed', 'a', 'osrap:openAccessCategory');
+        $n3->add_text ('oa', 'wos:open-access-category-open', 'rdfs:label', 'Closed');
+    }
+}
+
+sub id_key
+{
+    my ($name) = @_;
+
+    $name = lc ($name);
+    $name =~ s/[^[:alnum:]]+/-/g;
+    return ($name);
+}
+
+sub isbn13
+{
+    my ($isbn) = @_;
+
+    if ($isbn) {
+        $isbn =~ s/[^0-9]//g;
+        if (length ($isbn) == 13) {
+            return (1);
+        } else {
+            return (0);
+        }
+    }
+    return (0);
+}
+
+sub error
+{
+    my ($rec, $msg, @args) = @_;
+
+    printf (STDERR 'error %s: ' . $msg . "\n", $rec->{'UID'}, @args);
+}
+
+sub doctype
+{
+    my $type = {
+        'Main Cite'                              => 'cla:MainCite',
+        'Theater Review'                         => 'cla:TheaterReview',
+        'Database Review'                        => 'cla:DatabaseReview',
+        'Item Withdrawal'                        => 'cla:ItemWithdrawal',
+        'Music Score Review'                     => 'cla:MusicScoreReview',
+        'Poetry'                                 => 'cla:Poetry',
+        'Bibliography'                           => 'cla:Bibliography',
+        'Publication with Expression of Concern' => 'cla:PublicationWithExpressionofConcern',
+        'Film Review'                            => 'cla:FilmReview',
+        'Software Review'                        => 'cla:SoftwareReview',
+        'Book'                                   => 'bibo:Book',
+        'Art Exhibit Review'                     => 'cla:ArtExhibitReview',
+        'Retracted Publication'                  => 'cla:RetractedPublication',
+        'Reprint'                                => 'cla:Reprint',
+        'Retraction'                             => 'cla:Retraction',
+        'News Item'                              => 'cla:NewsItem',
+        'Biographical-Item'                      => 'cla:BiographicalItem',
+        'Data Paper'                             => 'cla:DataPaper',
+        'Correction'                             => 'cla:Correction',
+        'Book Review'                            => 'cla:BookReview',
+        'Early Access'                           => 'cla:EarlyAccess',
+        'Letter'                                 => 'cla:Letter',
+        'Editorial Material'                     => 'cla:EditorialMaterial',
+        'Book Chapter'                           => 'cla:BookChapter',
+        'Review'                                 => 'vivo:Review',
+        'Proceedings Paper'                      => 'cla:ProceedingsPaper',
+        'Meeting Abstract'                       => 'cla:MeetingAbstract',
+        'Article'                                => 'bibo:AcademicArticle',
+        'doc'                                    => 'bibo:Document',
+    };
+    return ($type);
+}
+
+sub load_json
+{
+    my ($wos, $jxs, $file) = @_;
+
+    if (open (my $fin, $file)) {
+        my $json = join ('', <$fin>);
+        close ($fin);
+        return ($jxs->decode ($json));
+    } else {
+        $wos->log ('f', 'fail to open %s for reading: %s', $file, $!);
+        exit (1);
+    }
+}
+

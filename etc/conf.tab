@@ -1,1 +1,5 @@
-utf8-decode off
+utf8-decode  off
+mongo-server 130.226.56.114
+mongo-db     nora-wos
+mongo-user   nora-wos
+mongo-pass   <passwd>
