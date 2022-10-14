@@ -5,4 +5,4 @@ then
     echo "usage: nora-wos-view-ind <UT>" >&2
     exit 1
 fi
-echo "select json from indicator where ut='$1';" | sqlite3 /var/lib/nora-wos/db/nora-wos.sqlite3 | jsonlint
+echo "select json from indicator where ut='$1';" | sqlite3 /var/lib/nora-wos/db/nora-wos.sqlite3 | /usr/sbin/nora-wos-jsonlint

@@ -1,0 +1,56 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use JSON::XS;
+use Fatal qw(open);
+
+my $args = {clean => 0, unless => 0};
+while ((@ARGV) && ($ARGV[0] =~ m/^-/)) {
+    my $arg = shift (@ARGV);
+    if ($arg eq '--') {
+        last;
+    }
+    if (($arg eq '--clean') || ($arg eq '-c')) {
+        $args->{'clean'} = 1;
+        next;
+    }
+    if (($arg eq '--unless') || ($arg eq '-u')) {
+        $args->{'unless'} = 1;
+        next;
+    }
+    die ("usage: jsonlint [--clean] [--unless] <json-file>\n");
+}
+my $json;
+my $file = shift (@ARGV);
+if ($file) {
+    if (!-e $file) {
+        warn ("fatal: file not found '$file'\n");
+        die ("usage: jsonlint [--clean] <file>\n");
+    }
+    my $fin;
+    if ($file =~ m/\.gz/) {
+        open ($fin, "zcat $file |");
+    } else {
+        open ($fin, $file);
+    }
+    $json = join ('', <$fin>);
+    close ($fin);
+} else {
+    $json = join ('', <STDIN>);
+}
+if ($args->{'clean'}) {
+    $json =~ s/^[^\[\{]+//;
+    $json =~ s/[^\]\}]+$//;
+}
+my $coder = JSON::XS->new->utf8->pretty->canonical;
+my $ref = $coder->decode ($json);
+my $fou;
+if ($args->{'unless'}) {
+    $fou = *STDOUT;
+} else {
+    open ($fou, '| less -i');
+}
+print ($fou $coder->encode ($ref), "\n");
+close ($fou);
+exit (0);
