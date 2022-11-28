@@ -246,34 +246,44 @@ sub pub_orgs
     my $id = $rec->{'ID'};
     foreach my $org ($wos->field ($id, $rec, 'static_data/fullrecord_metadata/addresses/address_name[]/address_spec')) {
         my $orgname;
+        my @uniorg = ();
         foreach my $name ($wos->field ($id, $org, 'organizations/organization[]')) {
+            if (!defined ($name->{'pref'})) {
+                $name->{'pref'} = 'N';
+            }
             if ((!defined ($orgname)) || ($name->{'pref'} eq 'Y')) {
                 $orgname = $name->{'content'};
+                if ($name->{'pref'} eq 'Y') {
+                    push (@uniorg, $name->{'content'});
+                }
             }
         }
         if (!$orgname) {
             $orgname = $org->{'full_address'};
         }
-        my ($key, $orgid);
-        if ($org->{'country'}) {
-            ($key, $orgid) = $wos->key_id ($orgname . ' ' . $org->{'country'});
-#           warn ("using '$orgname $org->{'country'}', key: '$key', id: '$orgid'\n");
-        } else {
-            ($key, $orgid) = $wos->key_id ($orgname . ' none');
-#           warn ("using '$orgname none', key: '$key', id: '$orgid'\n");
+        if (!@uniorg) {
+            push (@uniorg, $orgname);
         }
-        $n3->add ('orgs', "wos:afid-$orgid", 'a', 'foaf:Organization');
-        $n3->add_text ('orgs', "wos:afid-$orgid", 'rdfs:label', $orgname);
-        $n3->add_text ('orgs', "wos:afid-$orgid", 'vivo:identifier', $orgid);
         my $grpid = "wos:pub-$id-group-" . $org->{'addr_no'};
         $n3->add ('articles', "wos:pub-$id", 'norao:hasAuthorGroup', $grpid);
         $n3->add ('articles', $grpid, 'a', 'norao:AuthorGroup');
-        $n3->add ('articles', $grpid, 'norao:relatedToOrganization', "wos:afid-$orgid");
         $n3->add_text ('articles', $grpid, 'vivo:rank', $org->{'addr_no'});
         $n3->add_text ('articles', $grpid, 'norao:addressPart', $org->{'full_address'});
         $n3->add_text ('articles', $grpid, 'norao:city', $org->{'city'});
         $n3->add_text ('articles', $grpid, 'norao:countryName', $org->{'country'});
         $n3->add_text ('articles', $grpid, 'norao:countryCode', uc ($wos->country_code ($org->{'country'})));
+        foreach $orgname (@uniorg) {
+            my ($key, $orgid);
+            if ($org->{'country'}) {
+                ($key, $orgid) = $wos->key_id ($orgname . ' ' . $org->{'country'});
+            } else {
+                ($key, $orgid) = $wos->key_id ($orgname . ' none');
+            }
+            $n3->add ('orgs', "wos:afid-$orgid", 'a', 'foaf:Organization');
+            $n3->add_text ('orgs', "wos:afid-$orgid", 'rdfs:label', $orgname);
+            $n3->add_text ('orgs', "wos:afid-$orgid", 'vivo:identifier', $orgid);
+            $n3->add ('articles', $grpid, 'norao:relatedToOrganization', "wos:afid-$orgid");
+        }
         if ($org->{'full_address'}) {
             my ($key, $id) = $wos->key_id ($org->{'full_address'});
             $n3->add ('orgs', "wos:corg-$id", 'a', 'norao:CompositeOrganization');
